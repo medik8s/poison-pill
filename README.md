@@ -21,4 +21,5 @@ This work can also be useful for clusters with BMC credentials.
 https://www.openshift.com/blog/kubernetes-self-remediation-aka-poison-pill
 
 ## Project State
-Currently the project is in PoC phase
+Currently the project is in PoC phase.
+
