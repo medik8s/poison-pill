@@ -19,7 +19,7 @@ package controllers
 import (
 	"context"
 	"errors"
-	wdt "github.com/medik8s/poison-pill/watchdog"
+	wdt "github.com/medik8s/poison-pill/pkg/watchdog"
 	"path/filepath"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"testing"
