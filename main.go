@@ -35,6 +35,7 @@ import (
 	poisonpillv1alpha1 "github.com/medik8s/poison-pill/api/v1alpha1"
 	"github.com/medik8s/poison-pill/controllers"
 	pa "github.com/medik8s/poison-pill/pkg/peerassistant"
+	"github.com/medik8s/poison-pill/pkg/watchdog"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -81,11 +82,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	wd, err := watchdog.StartWatchdog()
+	if err != nil {
+		setupLog.Error(err, "failed to start watchdog, using soft reboot")
+	}
+
 	if err = (&controllers.PoisonPillRemediationReconciler{
 		Client:    mgr.GetClient(),
 		Log:       ctrl.Log.WithName("controllers").WithName("PoisonPillRemediation"),
 		Scheme:    mgr.GetScheme(),
 		ApiReader: mgr.GetAPIReader(),
+		Watchdog:  wd,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PoisonPillRemediation")
 		os.Exit(1)

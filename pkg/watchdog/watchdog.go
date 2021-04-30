@@ -1,7 +1,6 @@
 package watchdog
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -14,9 +13,13 @@ const (
 	watchdogDevice = "/dev/watchdog1"
 )
 
-type LinuxWatchdog struct {
-	fd   int
-	info *watchdogInfo
+var _ Watchdog = &linuxWatchdog{}
+
+type linuxWatchdog struct {
+	fd           int
+	info         *watchdogInfo
+	stop         chan interface{}
+	lastFoodTime time.Time
 }
 
 type watchdogInfo struct {
@@ -25,25 +28,62 @@ type watchdogInfo struct {
 	identity        [32]byte
 }
 
-func IsWatchdogAvailable() bool {
-	_, err := os.Stat(watchdogDevice)
-	return !os.IsNotExist(err)
-}
+func StartWatchdog() (Watchdog, error) {
 
-func StartWatchdog() (*LinuxWatchdog, error) {
+	if _, err := os.Stat(watchdogDevice); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("watchdog device not found: %v", err)
+		}
+		return nil, fmt.Errorf("failed to check for watchdog device: %v", err)
+	}
+
 	wdFd, err := openDevice()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open LinuxWatchdog device %s: %v", watchdogDevice, err)
 	}
 
-	wd := &LinuxWatchdog{fd: wdFd,
+	stop := make(chan interface{})
+	wd := &linuxWatchdog{
+		fd:   wdFd,
 		info: getInfo(wdFd),
+		stop: stop,
 	}
+
+	wdTimeout, err := wd.getTimeout()
+	if err != nil {
+		_ = wd.disarm()
+		return nil, fmt.Errorf("failed to get timeout of watchdog, disarmed: %v", err)
+	}
+
+	// feed until stopped
+	ticker := time.NewTicker(*wdTimeout / 3)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if err := wd.feed(); err != nil {
+					fmt.Println(fmt.Errorf("failed to feed watchdog! %v", err))
+				} else {
+					wd.lastFoodTime = time.Now()
+				}
+			}
+		}
+	}()
 
 	return wd, nil
 }
 
-func (wd *LinuxWatchdog) GetTimeout() (*time.Duration, error) {
+func (wd *linuxWatchdog) Stop() {
+	wd.stop <- true
+}
+
+func (wd *linuxWatchdog) LastFoodTime() time.Time {
+	return wd.lastFoodTime
+}
+
+func (wd *linuxWatchdog) getTimeout() (*time.Duration, error) {
 	timeout, err := IoctlGetInt(wd.fd, WDIOC_GETTIMEOUT)
 
 	if err != nil {
@@ -54,17 +94,7 @@ func (wd *LinuxWatchdog) GetTimeout() (*time.Duration, error) {
 	return &timeoutDuration, nil
 }
 
-func (wd *LinuxWatchdog) SetTimeout(seconds time.Duration) error {
-	if !wd.hasFeature(WDIOF_SETTIMEOUT) {
-		return errors.New("LinuxWatchdog device doesn't support timeout changes")
-	}
-
-	return IoctlSetPointerInt(
-		wd.fd, WDIOC_SETTIMEOUT,
-		int(seconds/time.Second))
-}
-
-func (wd *LinuxWatchdog) Feed() error {
+func (wd *linuxWatchdog) feed() error {
 	food := []byte("a")
 	_, err := Write(wd.fd, food)
 
@@ -72,7 +102,7 @@ func (wd *LinuxWatchdog) Feed() error {
 }
 
 //Disarm closes the LinuxWatchdog without triggering reboots, even if the LinuxWatchdog will not be fed any more
-func (wd *LinuxWatchdog) Disarm() error {
+func (wd *linuxWatchdog) disarm() error {
 	b := []byte("V") // "V" is a special char for signaling LinuxWatchdog disarm
 	_, err := Write(wd.fd, b)
 
@@ -81,10 +111,6 @@ func (wd *LinuxWatchdog) Disarm() error {
 	}
 
 	return Close(wd.fd)
-}
-
-func (wd *LinuxWatchdog) hasFeature(value uint32) bool {
-	return wd.info != nil && wd.info.options&value == value
 }
 
 func getInfo(fd int) *watchdogInfo {

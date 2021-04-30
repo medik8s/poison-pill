@@ -45,7 +45,7 @@ import (
 var cfg *rest.Config
 var k8sClient client.Client
 var testEnv *envtest.Environment
-var dummyDog wdt.DummyWatchdog
+var dummyDog wdt.Watchdog
 var apiReaderWrapper ApiReaderWrapper
 
 type ApiReaderWrapper struct {
@@ -102,16 +102,17 @@ var _ = BeforeSuite(func() {
 		ShouldSimulateFailure: false,
 	}
 
+	dummyDog = wdt.StartDummyWatchdog()
+
 	err = (&PoisonPillRemediationReconciler{
 		Client:    k8sManager.GetClient(),
 		Log:       ctrl.Log.WithName("controllers").WithName("poison-pill-controller"),
 		ApiReader: &apiReaderWrapper,
+		Watchdog:  dummyDog,
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
 	reconcileInterval = 1 * time.Second
-	dummyDog = wdt.DummyWatchdog{}
-	watchdog = dummyDog
 	myNodeName = "node1"
 
 	go func() {

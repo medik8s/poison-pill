@@ -1,29 +1,45 @@
 package watchdog
 
-import "time"
+import (
+	"time"
+)
 
-type DummyWatchdog struct{}
+const (
+	timeout = time.Second
+)
 
-var LastFoodTime time.Time
+var _ Watchdog = &dummyWatchdog{}
 
-func (DummyWatchdog) Feed() error {
-	LastFoodTime = time.Now()
-	return nil
+type dummyWatchdog struct {
+	stop         chan interface{}
+	lastFoodTime time.Time
 }
 
-func (DummyWatchdog) GetTimeout() (*time.Duration, error) {
-	d := time.Second * 15
-	return &d, nil
+func StartDummyWatchdog() Watchdog {
+	stop := make(chan interface{})
+	d := &dummyWatchdog{
+		stop: stop,
+	}
+
+	// feed until stopped
+	ticker := time.NewTicker(timeout / 3)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				d.lastFoodTime = time.Now()
+			}
+		}
+	}()
+	return d
 }
 
-func (DummyWatchdog) SetTimeout(seconds time.Duration) error {
-	panic("implement me")
+func (d *dummyWatchdog) Stop() {
+	d.stop <- true
 }
 
-func (DummyWatchdog) Disarm() error {
-	panic("implement me")
-}
-
-func (DummyWatchdog) GetLastFoodTime() time.Time {
-	return LastFoodTime
+func (d *dummyWatchdog) LastFoodTime() time.Time {
+	return d.lastFoodTime
 }
