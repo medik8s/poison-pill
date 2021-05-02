@@ -30,6 +30,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	"strconv"
 	"time"
 
@@ -104,7 +107,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 		if wdt.IsWatchdogAvailable() {
 			if err := r.initWatchdog(); err != nil {
 				r.logger.Error(err, "failed to start watchdog device")
-				return ctrl.Result{RequeueAfter: reconcileInterval}, err
+				return ctrl.Result{}, err
 			}
 		}
 	} else {
@@ -125,7 +128,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 
 	if err != nil {
 		if apiErrors.IsNotFound(err) {
-			return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+			return ctrl.Result{}, nil
 		}
 		return r.handleApiError(err)
 	}
@@ -152,7 +155,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 		r.logger.Info("node has been restored", "node name", node.Name)
 		//todo this means we only allow one remediation attempt per ppr. we could add some config to
 		//ppr which states max remediation attempts, and the timeout to consider a remediation failed.
-		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+		return ctrl.Result{}, nil
 	}
 
 	if !node.Spec.Unschedulable {
@@ -221,9 +224,29 @@ func (r *PoisonPillRemediationReconciler) updatePprStatus(node *v1.Node, ppr *v1
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PoisonPillRemediationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	periodicEventChannel := make(chan event.GenericEvent, 100)
+	channelSource := &source.Channel{
+		Source: periodicEventChannel,
+	}
+
+	go r.runPeriodicReconcile(periodicEventChannel, reconcileInterval)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PoisonPillRemediation{}).
+		Watches(channelSource, &handler.EnqueueRequestForObject{}).
 		Complete(r)
+}
+
+func (r *PoisonPillRemediationReconciler) runPeriodicReconcile(channel chan<- event.GenericEvent, dur time.Duration) {
+	thisNodeEvent := event.GenericEvent{Object: &v1alpha1.PoisonPillRemediation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      myNodeName,
+			Namespace: "openshift-machine-api", //todo generalize
+		},
+	}}
+	for range time.Tick(dur) {
+		channel <- thisNodeEvent
+	}
 }
 
 func (r *PoisonPillRemediationReconciler) initWatchdog() error {
@@ -279,7 +302,7 @@ func (r *PoisonPillRemediationReconciler) restoreNode(nodeToRestore *v1.Node) (c
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+	return ctrl.Result{}, nil
 }
 
 // getNodeFromPpr returns the unhealthy node reported in the given ppr
@@ -365,14 +388,14 @@ func (r *PoisonPillRemediationReconciler) handleApiError(err error) (ctrl.Result
 	r.logger.Error(err, "failed to retrieve machine from api-server", "error count is now", errCount)
 
 	if errCount <= maxFailuresThreshold {
-		return ctrl.Result{RequeueAfter: reconcileInterval}, err
+		return ctrl.Result{}, err
 	}
 
 	r.logger.Info("Error count exceeds threshold, trying to ask other nodes if I'm healthy")
 	if nodes == nil || len(nodes.Items) == 0 {
 		if err := r.updateNodesList(); err != nil {
 			r.logger.Error(err, "peers list is empty and couldn't be retrieved from server")
-			return ctrl.Result{RequeueAfter: reconcileInterval}, err
+			return ctrl.Result{}, err
 		}
 		//todo maybe we need to check if this happens too much and reboot
 	}
@@ -401,7 +424,7 @@ func (r *PoisonPillRemediationReconciler) handleApiError(err error) (ctrl.Result
 		apiErrorResponseCount = 0
 		errCount = 0
 		nodesToAsk = nil
-		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+		return ctrl.Result{}, nil
 	}
 
 	if unhealthyResponses > 0 {
@@ -419,7 +442,7 @@ func (r *PoisonPillRemediationReconciler) handleApiError(err error) (ctrl.Result
 			errCount = 0
 			nodesToAsk = nil
 			apiErrorResponseCount = 0
-			return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+			return ctrl.Result{}, nil
 		}
 	}
 
@@ -471,13 +494,13 @@ func (r *PoisonPillRemediationReconciler) reboot() (ctrl.Result, error) {
 		//we couldn't init a watchdog so far but requested to be rebooted. we issue a software reboot
 		if err := softwareReboot(); err != nil {
 			r.logger.Error(err, "failed to run reboot command")
-			return ctrl.Result{RequeueAfter: reconcileInterval}, err
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+		return ctrl.Result{}, nil
 	}
 	//we stop feeding the watchdog and waiting for a reboot
 	r.logger.Info("watchdog feeding has stopped, waiting for reboot to commence")
-	return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+	return ctrl.Result{}, nil
 }
 
 //updates nodes global variable to include list of the nodes objects that exists in api-server
