@@ -1,11 +1,12 @@
 package watchdog
 
 import (
+	"sync"
 	"time"
 )
 
 const (
-	timeout = time.Second
+	timeout = 1 * time.Second
 )
 
 var _ Watchdog = &dummyWatchdog{}
@@ -13,12 +14,14 @@ var _ Watchdog = &dummyWatchdog{}
 type dummyWatchdog struct {
 	stop         chan interface{}
 	lastFoodTime time.Time
+	once         sync.Once
 }
 
 func StartDummyWatchdog() Watchdog {
 	stop := make(chan interface{})
 	d := &dummyWatchdog{
 		stop: stop,
+		once: sync.Once{},
 	}
 
 	// feed until stopped
@@ -37,7 +40,7 @@ func StartDummyWatchdog() Watchdog {
 }
 
 func (d *dummyWatchdog) Stop() {
-	d.stop <- true
+	d.once.Do(func() { d.stop <- true })
 }
 
 func (d *dummyWatchdog) LastFoodTime() time.Time {
