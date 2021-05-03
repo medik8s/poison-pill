@@ -6,11 +6,17 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	. "golang.org/x/sys/unix"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
-import . "golang.org/x/sys/unix"
 
 const (
 	watchdogDevice = "/dev/watchdog1"
+)
+
+var (
+	log = ctrl.Log.WithName("watchdog")
 )
 
 var _ Watchdog = &linuxWatchdog{}
@@ -18,7 +24,7 @@ var _ Watchdog = &linuxWatchdog{}
 type linuxWatchdog struct {
 	fd           int
 	info         *watchdogInfo
-	stop         chan interface{}
+	stop         chan struct{}
 	lastFoodTime time.Time
 }
 
@@ -42,7 +48,7 @@ func StartWatchdog() (Watchdog, error) {
 		return nil, fmt.Errorf("failed to open LinuxWatchdog device %s: %v", watchdogDevice, err)
 	}
 
-	stop := make(chan interface{})
+	stop := make(chan struct{})
 	wd := &linuxWatchdog{
 		fd:   wdFd,
 		info: getInfo(wdFd),
@@ -64,7 +70,7 @@ func StartWatchdog() (Watchdog, error) {
 				return
 			case <-ticker.C:
 				if err := wd.feed(); err != nil {
-					fmt.Println(fmt.Errorf("failed to feed watchdog! %v", err))
+					log.Error(err, "failed to feed watchdog!")
 				} else {
 					wd.lastFoodTime = time.Now()
 				}
@@ -76,7 +82,10 @@ func StartWatchdog() (Watchdog, error) {
 }
 
 func (wd *linuxWatchdog) Stop() {
-	wd.stop <- true
+	select {
+	case wd.stop <- struct{}{}:
+	default: // no-op, already stopped
+	}
 }
 
 func (wd *linuxWatchdog) LastFoodTime() time.Time {
