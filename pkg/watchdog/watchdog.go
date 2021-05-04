@@ -3,20 +3,17 @@ package watchdog
 import (
 	"fmt"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
+	"github.com/go-logr/logr"
 	. "golang.org/x/sys/unix"
-	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 const (
 	watchdogDevice = "/dev/watchdog1"
-)
-
-var (
-	log = ctrl.Log.WithName("watchdog")
 )
 
 var _ Watchdog = &linuxWatchdog{}
@@ -25,7 +22,10 @@ type linuxWatchdog struct {
 	fd           int
 	info         *watchdogInfo
 	stop         chan struct{}
+	once         sync.Once
+	mutex        sync.Mutex
 	lastFoodTime time.Time
+	log          logr.Logger
 }
 
 type watchdogInfo struct {
@@ -34,7 +34,7 @@ type watchdogInfo struct {
 	identity        [32]byte
 }
 
-func StartWatchdog() (Watchdog, error) {
+func StartWatchdog(log logr.Logger) (Watchdog, error) {
 
 	if _, err := os.Stat(watchdogDevice); err != nil {
 		if os.IsNotExist(err) {
@@ -50,9 +50,12 @@ func StartWatchdog() (Watchdog, error) {
 
 	stop := make(chan struct{})
 	wd := &linuxWatchdog{
-		fd:   wdFd,
-		info: getInfo(wdFd),
-		stop: stop,
+		fd:    wdFd,
+		info:  getInfo(wdFd),
+		stop:  stop,
+		once:  sync.Once{},
+		mutex: sync.Mutex{},
+		log:   log,
 	}
 
 	wdTimeout, err := wd.getTimeout()
@@ -67,12 +70,15 @@ func StartWatchdog() (Watchdog, error) {
 		for {
 			select {
 			case <-stop:
+				ticker.Stop()
 				return
 			case <-ticker.C:
 				if err := wd.feed(); err != nil {
 					log.Error(err, "failed to feed watchdog!")
 				} else {
+					wd.mutex.Lock()
 					wd.lastFoodTime = time.Now()
+					wd.mutex.Unlock()
 				}
 			}
 		}
@@ -82,13 +88,12 @@ func StartWatchdog() (Watchdog, error) {
 }
 
 func (wd *linuxWatchdog) Stop() {
-	select {
-	case wd.stop <- struct{}{}:
-	default: // no-op, already stopped
-	}
+	wd.once.Do(func() { close(wd.stop) })
 }
 
 func (wd *linuxWatchdog) LastFoodTime() time.Time {
+	wd.mutex.Lock()
+	defer wd.mutex.Unlock()
 	return wd.lastFoodTime
 }
 

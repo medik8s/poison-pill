@@ -18,13 +18,13 @@ package main
 
 import (
 	"flag"
-	machinev1beta1 "github.com/openshift/machine-api-operator/pkg/apis/machine/v1beta1"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	machinev1beta1 "github.com/openshift/machine-api-operator/pkg/apis/machine/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -82,17 +82,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	wd, err := watchdog.StartWatchdog()
+	// TODO disarm the watchdog when we exit?!
+	wd, err := watchdog.StartWatchdog(ctrl.Log.WithName("watchdog"))
 	if err != nil {
 		setupLog.Error(err, "failed to start watchdog, using soft reboot")
 	}
 
 	if err = (&controllers.PoisonPillRemediationReconciler{
-		Client:    mgr.GetClient(),
-		Log:       ctrl.Log.WithName("controllers").WithName("PoisonPillRemediation"),
-		Scheme:    mgr.GetScheme(),
-		ApiReader: mgr.GetAPIReader(),
-		Watchdog:  wd,
+		Client:   mgr.GetClient(),
+		Log:      ctrl.Log.WithName("controllers").WithName("PoisonPillRemediation"),
+		Scheme:   mgr.GetScheme(),
+		Watchdog: wd,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PoisonPillRemediation")
 		os.Exit(1)
