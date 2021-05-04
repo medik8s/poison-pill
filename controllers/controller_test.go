@@ -25,7 +25,7 @@ var _ = Describe("ppr Controller", func() {
 		logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 		It("Disable api-server failure simulation", func() {
-			shouldReboot = false
+			//shouldReboot = false
 			apiReaderWrapper.ShouldSimulateFailure = false
 		})
 
@@ -126,7 +126,7 @@ var _ = Describe("ppr Controller", func() {
 			// tried to reboot
 
 			// stop rebooting yourself, we want you to recover the node
-			shouldReboot = false
+			//shouldReboot = false
 
 			node = &v1.Node{}
 
@@ -171,7 +171,7 @@ var _ = Describe("ppr Controller", func() {
 		It("Sleep", func() {
 			Consistently(func() bool {
 				return true
-			}, (maxFailuresThreshold+2)*reconcileInterval, 1*time.Second).Should(BeTrue())
+			}, ( /*maxFailuresThreshold*/ 3+2)*reconcileInterval, 1*time.Second).Should(BeTrue())
 		})
 
 		It("Verify that watchdog is not receiving food", func() {

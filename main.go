@@ -91,7 +91,8 @@ func main() {
 	}
 
 	// TODO make the interval configurable?
-	peers, err := peers.New(30*time.Minute, mgr.GetClient(), ctrl.Log.WithName("peers"))
+	// TODO use a long interval here, and do a seperate cheaper "healthcheck" with a lower interval in another loop?
+	peers, err := peers.New(wd, 5*time.Minute, mgr.GetClient(), ctrl.Log.WithName("peers"))
 	if err != nil {
 		setupLog.Error(err, "failed to init peer list")
 		os.Exit(1)

@@ -3,7 +3,11 @@ package peers
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"os"
+	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,6 +18,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	poisonPill "github.com/medik8s/poison-pill/api"
+	"github.com/medik8s/poison-pill/pkg/watchdog"
 )
 
 const (
@@ -21,10 +28,13 @@ const (
 	hostnameLabelName = "kubernetes.io/hostname"
 	// TODO make this configurable?
 	nrOfPeers = 15
-)
 
-var (
-	myNodeName = os.Getenv(nodeNameEnvVar)
+	ignoreNewErrorsFor = 15 * time.Second
+	maxErrorsThreshold = 3 //after which we start asking peers for health status
+
+	peerProtocol = "http"
+	peerPort     = 30001
+	peerTimeout  = 10 * time.Second
 )
 
 type Peers struct {
@@ -33,21 +43,29 @@ type Peers struct {
 	peerList     *[]v1.Node
 	peerSelector labels.Selector
 	mutex        sync.Mutex
+	myNodeName   string
+	wd           watchdog.Watchdog
+	lastErrorAt  time.Time
+	errorCount   int
+	httpClient   *http.Client
 }
 
-func New(peerUpdateInterval time.Duration, c client.Client, log logr.Logger) (*Peers, error) {
+func New(wd watchdog.Watchdog, peerUpdateInterval time.Duration, c client.Client, log logr.Logger) (*Peers, error) {
 
 	p := &Peers{
-		Client: c,
-		log:    log,
-		mutex:  sync.Mutex{},
+		Client:     c,
+		log:        log,
+		mutex:      sync.Mutex{},
+		myNodeName: os.Getenv(nodeNameEnvVar),
+		wd:         wd,
+		httpClient: &http.Client{Timeout: peerTimeout},
 	}
 
 	// get own hostname label value and create a label selector from it
 	// will be used for updating the peer list and skipping ourself
 	myNode := &v1.Node{}
 	key := client.ObjectKey{
-		Name: myNodeName,
+		Name: p.myNodeName,
 	}
 	if err := p.Get(context.Background(), key, myNode); err != nil {
 		log.Error(err, "failed to get own node")
@@ -63,7 +81,7 @@ func New(peerUpdateInterval time.Duration, c client.Client, log logr.Logger) (*P
 	}
 
 	// get initial peer list
-	p.UpdatePeers()
+	p.updatePeers()
 
 	// start loop for updating peer list regularly
 	ticker := time.NewTicker(peerUpdateInterval)
@@ -71,7 +89,7 @@ func New(peerUpdateInterval time.Duration, c client.Client, log logr.Logger) (*P
 		for {
 			select {
 			case <-ticker.C:
-				p.UpdatePeers()
+				p.updatePeers()
 			}
 		}
 	}()
@@ -79,7 +97,7 @@ func New(peerUpdateInterval time.Duration, c client.Client, log logr.Logger) (*P
 	return p, nil
 }
 
-func (p *Peers) UpdatePeers() {
+func (p *Peers) updatePeers() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -91,16 +109,215 @@ func (p *Peers) UpdatePeers() {
 			p.peerList = &[]v1.Node{}
 		}
 		p.log.Error(err, "failed to update peer list")
-		// TODO handle API error... ask peers now? Maybe not, and another healthcheck loop makes sense,
-		// because we don't want and need to update the node list very frequently
+		if healthy := p.HandleError(err); !healthy {
+			// we have a problem on this node
+			p.log.Error(err, "we are unhealthy, triggering a reboot")
+			if err := p.Reboot(); err != nil {
+				p.log.Error(err, "failed to trigger reboot")
+			}
+		} else {
+			p.log.Error(err, "peers did not confirm that we are unhealthy, ignoring error")
+		}
 		return
 	}
 	p.peerList = &nodes.Items
 }
 
-func (p *Peers) GetPeers() *[]v1.Node {
+func (p *Peers) getPeers() *[]v1.Node {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	return p.peerList
+}
+
+// HandleError keeps track of the number of errors reported, and when a certain amount of error occur within a certain
+// time, ask peers if this node is healthy. Returns if the node is considered to be healthy or not.
+func (p *Peers) HandleError(newError error) bool {
+
+	//we don't want to increase the err count too quick
+	if !p.lastErrorAt.IsZero() && time.Now().Before(p.lastErrorAt.Add(ignoreNewErrorsFor)) {
+		p.log.Info("Ignoring error, it came too fast after the last one", "error", newError)
+		return true
+	}
+
+	p.lastErrorAt = time.Now()
+	p.errorCount++
+
+	if p.errorCount < maxErrorsThreshold {
+		p.log.Info("Ignoring error, error count below threshold", "current count", p.errorCount, "threshold", maxErrorsThreshold)
+		return true
+	}
+
+	p.log.Info("Error count exceeds threshold, trying to ask other nodes if I'm healthy")
+
+	// update peers, if it fails we still have the cached list
+	p.updatePeers()
+	nodes := *p.getPeers() // de-reference nodes here, so we don't accidentally modify the original list later on
+	if nodes == nil || len(nodes) == 0 {
+		p.log.Info("Peers list is empty and / or couldn't be retrieved from server, nothing we can do, so consider the node being healthy")
+		//todo maybe we need to check if this happens too much and reboot
+		return true
+	}
+
+	// Re-enable nodesToAks in case we add some kind of retry here...
+	//if nodesToAsk == nil || len(nodesToAsk) == 0 {
+	//	//deep copy nodes to ask, as we're going to remove nodes we already asked from the list
+	//	nodesToAsk = *nodes
+	//}
+
+	// TODO we only get max 15 nodes at the moment (does that make sense?), just ask a batch of 5 for now...?
+	//nodesBatchCount := len(nodes) / 10
+	//if nodesBatchCount == 0 {
+	//	nodesBatchCount = 1
+	//}
+	nodesBatchCount := 5
+
+	chosenNodesAddresses := p.popNodes(&nodes, nodesBatchCount)
+	nrAddresses := len(chosenNodesAddresses)
+	responsesChan := make(chan poisonPill.HealthCheckResponse, nrAddresses)
+
+	for _, address := range chosenNodesAddresses {
+		go p.getHealthStatusFromPeer(address, responsesChan)
+	}
+
+	healthyResponses, unhealthyResponses, apiErrorsResponses, _ := p.sumPeersResponses(nodesBatchCount, responsesChan)
+
+	if healthyResponses > 0 {
+		p.log.Info("Peer told me I'm healthy.")
+		p.reset()
+		return true
+	}
+
+	if unhealthyResponses > 0 {
+		p.log.Info("Peer told me I'm unhealthy!")
+		return false
+	}
+
+	//todo consider using [m|n]hc.spec.maxUnhealthy instead of 50%
+	if apiErrorsResponses > nrAddresses/2 {
+		//more than 50% of the nodes being asked returned an api error
+		//assuming this is a control plane failure as others can't access api-server as well
+		p.log.Info("More than 50% of the nodes couldn't access the api-server, assuming this is a control plane failure")
+		p.reset()
+		return true
+	}
+
+	// unclear status, assume we are healthy
+	return true
+}
+
+func (p *Peers) popNodes(nodes *[]v1.Node, count int) []string {
+	nrOfNodes := len(*nodes)
+	if nrOfNodes == 0 {
+		return []string{}
+	}
+
+	nodesCount := count
+	if nodesCount > nrOfNodes {
+		nodesCount = nrOfNodes
+	}
+
+	//todo maybe we should pick nodes randomly rather than relying on the order returned from api-server
+	addresses := make([]string, nodesCount)
+	for i := 0; i < nodesCount; i++ {
+		addresses[i] = (*nodes)[i].Status.Addresses[0].Address //todo node might have multiple addresses or none
+	}
+
+	//*nodes = (*nodes)[nodesCount:] //remove popped nodes from the list
+
+	return addresses
+}
+
+//getHealthStatusFromPeer issues a GET request to the specified IP and returns the result from the peer into the given channel
+func (p *Peers) getHealthStatusFromPeer(endpointIp string, results chan<- poisonPill.HealthCheckResponse) {
+	url := fmt.Sprintf("%s://%s:%d/health/%s", peerProtocol, endpointIp, peerPort, p.myNodeName)
+
+	resp, err := p.httpClient.Get(url)
+	if err != nil {
+		p.log.Error(err, "failed to get health status from peer", "url", url)
+		results <- poisonPill.RequestFailed
+		return
+	}
+
+	defer func() {
+		if err = resp.Body.Close(); err != nil {
+			p.log.Error(err, "failed to close health response from peer")
+		}
+	}()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		p.log.Error(err, "failed to read health response from peer")
+		results <- -1
+		return
+	}
+
+	healthStatusResult, err := strconv.Atoi(string(body))
+
+	if err != nil {
+		p.log.Error(err, "failed to convert health check response from string to int")
+	}
+
+	results <- poisonPill.HealthCheckResponse(healthStatusResult)
+	return
+}
+
+func (p *Peers) sumPeersResponses(nodesBatchCount int, responsesChan chan poisonPill.HealthCheckResponse) (int, int, int, int) {
+	healthyResponses := 0
+	unhealthyResponses := 0
+	apiErrorsResponses := 0
+	noResponse := 0
+
+	for i := 0; i < nodesBatchCount; i++ {
+		response := <-responsesChan
+		p.log.Info("got response from peer", "response", response)
+
+		switch response {
+		case poisonPill.Unhealthy:
+			healthyResponses++
+			break
+		case poisonPill.Healthy:
+			unhealthyResponses++
+			break
+		case poisonPill.ApiError:
+			apiErrorsResponses++
+			break
+		case poisonPill.RequestFailed:
+			noResponse++
+		default:
+			p.log.Error(fmt.Errorf("unexpected response"),
+				"Received unexpected value from peer while trying to retrieve health status", "value", response)
+		}
+	}
+
+	return healthyResponses, unhealthyResponses, apiErrorsResponses, noResponse
+}
+
+func (p *Peers) reset() {
+	p.lastErrorAt = time.Time{}
+	p.errorCount = 0
+}
+
+// Reboot stops watchdog feeding ig watchdog exists, otherwise issuing a software reboot
+func (p *Peers) Reboot() error {
+	if p.wd == nil {
+		p.log.Info("no watchdog is present on this host, trying software reboot")
+		//we couldn't init a watchdog so far but requested to be rebooted. we issue a software reboot
+		if err := p.softwareReboot(); err != nil {
+			p.log.Error(err, "failed to run reboot command")
+			return err
+		}
+		return nil
+	}
+	//we stop feeding the watchdog and waiting for a reboot
+	p.wd.Stop()
+	p.log.Info("watchdog feeding has stopped, waiting for reboot to commence")
+	return nil
+}
+
+//softwareReboot performs software reboot by running systemctl reboot
+func (p *Peers) softwareReboot() error {
+	// hostPID: true and privileged:true required to run this
+	rebootCmd := exec.Command("/usr/bin/nsenter", "-m/proc/1/ns/mnt", "/bin/systemctl", "reboot")
+	return rebootCmd.Run()
 }
