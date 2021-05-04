@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -35,6 +36,7 @@ import (
 	poisonpillv1alpha1 "github.com/medik8s/poison-pill/api/v1alpha1"
 	"github.com/medik8s/poison-pill/controllers"
 	pa "github.com/medik8s/poison-pill/pkg/peerassistant"
+	"github.com/medik8s/poison-pill/pkg/peers"
 	"github.com/medik8s/poison-pill/pkg/watchdog"
 	//+kubebuilder:scaffold:imports
 )
@@ -88,11 +90,19 @@ func main() {
 		setupLog.Error(err, "failed to start watchdog, using soft reboot")
 	}
 
+	// TODO make the interval configurable?
+	peers, err := peers.New(30*time.Minute, mgr.GetClient(), ctrl.Log.WithName("peers"))
+	if err != nil {
+		setupLog.Error(err, "failed to init peer list")
+		os.Exit(1)
+	}
+
 	if err = (&controllers.PoisonPillRemediationReconciler{
 		Client:   mgr.GetClient(),
 		Log:      ctrl.Log.WithName("controllers").WithName("PoisonPillRemediation"),
 		Scheme:   mgr.GetScheme(),
 		Watchdog: wd,
+		Peers:    peers,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PoisonPillRemediation")
 		os.Exit(1)

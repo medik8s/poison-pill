@@ -20,13 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	poisonPill "github.com/medik8s/poison-pill/api"
-	"github.com/medik8s/poison-pill/pkg/utils"
 	"io/ioutil"
-	v1 "k8s.io/api/core/v1"
-	apiErrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"net/http"
 	"os"
 	"os/exec"
@@ -34,13 +28,21 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	wdt "github.com/medik8s/poison-pill/pkg/watchdog"
+
+	machinev1beta1 "github.com/openshift/machine-api-operator/pkg/apis/machine/v1beta1"
+	v1 "k8s.io/api/core/v1"
+	apiErrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	poisonPill "github.com/medik8s/poison-pill/api"
 	"github.com/medik8s/poison-pill/api/v1alpha1"
-	machinev1beta1 "github.com/openshift/machine-api-operator/pkg/apis/machine/v1beta1"
+	"github.com/medik8s/poison-pill/pkg/peers"
+	"github.com/medik8s/poison-pill/pkg/utils"
+	wdt "github.com/medik8s/poison-pill/pkg/watchdog"
 )
 
 const (
@@ -57,9 +59,8 @@ const (
 
 var (
 	reconcileInterval = 15 * time.Second
-	nodes             *v1.NodeList
 	//nodes to ask for health results
-	nodesToAsk            *v1.NodeList
+	nodesToAsk            []v1.Node
 	errCount              int
 	apiErrorResponseCount int
 	shouldReboot          bool
@@ -80,10 +81,10 @@ type PoisonPillRemediationReconciler struct {
 	client.Client
 	Log logr.Logger
 	//logger is a logger that holds the CR name being reconciled
-	logger    logr.Logger
-	Scheme    *runtime.Scheme
-	ApiReader client.Reader
-	Watchdog  wdt.Watchdog
+	logger   logr.Logger
+	Scheme   *runtime.Scheme
+	Watchdog wdt.Watchdog
+	Peers    *peers.Peers
 }
 
 //+kubebuilder:rbac:groups=poison-pill.medik8s.io,resources=poisonpillremediations,verbs=get;list;watch;create;update;patch;delete
@@ -104,13 +105,12 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 	defer cancelFunc()
 
 	ppr := &v1alpha1.PoisonPillRemediation{}
-	//we use ApiReader as it doesn't use the cache. Otherwise, the cache returns the object
-	//even though the api server is not available
-	err := r.ApiReader.Get(ctx, req.NamespacedName, ppr)
+	err := r.Get(ctx, req.NamespacedName, ppr)
 
 	if err != nil {
 		if apiErrors.IsNotFound(err) {
-			return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+			// PPR is deleted, stop reconciling
+			return ctrl.Result{}, nil
 		}
 		return r.handleApiError(err)
 	}
@@ -118,8 +118,6 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 	//if there was no error we reset the global error count
 	errCount = 0
 	apiErrorResponseCount = 0
-
-	_ = r.updateNodesList()
 
 	node, err := r.getNodeFromPpr(ppr)
 	if err != nil {
@@ -269,7 +267,7 @@ func (r *PoisonPillRemediationReconciler) getNodeFromPpr(ppr *v1alpha1.PoisonPil
 		Namespace: "",
 	}
 
-	if err := r.ApiReader.Get(context.TODO(), key, node); err != nil {
+	if err := r.Get(context.TODO(), key, node); err != nil {
 		return nil, err
 	}
 
@@ -301,7 +299,7 @@ func (r *PoisonPillRemediationReconciler) getNodeFromMachine(ref metav1.OwnerRef
 		Namespace: machine.Status.NodeRef.Namespace,
 	}
 
-	if err := r.ApiReader.Get(context.Background(), key, node); err != nil {
+	if err := r.Get(context.Background(), key, node); err != nil {
 		r.logger.Error(err, "failed to retrieve node from the unhealthy machine",
 			"node name", node.Name, "machine name", machine.Name)
 		return nil, err
@@ -337,25 +335,28 @@ func (r *PoisonPillRemediationReconciler) handleApiError(err error) (ctrl.Result
 	}
 
 	r.logger.Info("Error count exceeds threshold, trying to ask other nodes if I'm healthy")
-	if nodes == nil || len(nodes.Items) == 0 {
-		if err := r.updateNodesList(); err != nil {
-			r.logger.Error(err, "peers list is empty and couldn't be retrieved from server")
-			return ctrl.Result{RequeueAfter: reconcileInterval}, err
-		}
+	// update peers, if it fails we still get a cached list
+	r.Peers.UpdatePeers()
+	nodes := r.Peers.GetPeers()
+	if nodes == nil || len(*nodes) == 0 {
+		r.logger.Error(err, "peers list is empty and couldn't be retrieved from server")
+		return ctrl.Result{RequeueAfter: reconcileInterval}, err
 		//todo maybe we need to check if this happens too much and reboot
 	}
 
-	if nodesToAsk == nil || len(nodesToAsk.Items) == 0 {
+	if nodesToAsk == nil || len(nodesToAsk) == 0 {
 		//deep copy nodes to ask, as we're going to remove nodes we already asked from the list
-		nodesToAsk = nodes.DeepCopy()
+		nodesToAsk = *nodes
 	}
 
-	nodesBatchCount := len(nodes.Items) / 10
-	if nodesBatchCount == 0 {
-		nodesBatchCount = 1
-	}
+	// TODO we only get max 15 nodes at the moment (see peers.go, does that make sense?), just ask in batch of 3 for now...?
+	//nodesBatchCount := len(nodes) / 10
+	//if nodesBatchCount == 0 {
+	//	nodesBatchCount = 1
+	//}
+	nodesBatchCount := 3
 
-	chosenNodesAddresses := popNodes(nodesToAsk, nodesBatchCount)
+	chosenNodesAddresses := popNodes(&nodesToAsk, nodesBatchCount)
 	responsesChan := make(chan poisonPill.HealthCheckResponse, nodesBatchCount)
 
 	for _, address := range chosenNodesAddresses {
@@ -381,7 +382,7 @@ func (r *PoisonPillRemediationReconciler) handleApiError(err error) (ctrl.Result
 	if apiErrorsResponses > 0 {
 		apiErrorResponseCount += apiErrorsResponses
 		//todo consider using [m|n]hc.spec.maxUnhealthy instead of 50%
-		if apiErrorResponseCount > len(nodes.Items)/2 { //already reached more than 50% of the nodes and all of them returned api error
+		if apiErrorResponseCount > len(*nodes)/2 { //already reached more than 50% of the nodes and all of them returned api error
 			//assuming this is a control plane failure as others can't access api-server as well
 			r.logger.Info("More than 50% of the nodes couldn't access the api-server, assuming this is a control plane failure")
 			errCount = 0
@@ -391,7 +392,7 @@ func (r *PoisonPillRemediationReconciler) handleApiError(err error) (ctrl.Result
 		}
 	}
 
-	if len(nodesToAsk.Items) == 0 {
+	if len(nodesToAsk) == 0 {
 		//we already asked all peers
 		r.logger.Error(err, "failed to get health status from the last peer in the list. Assuming unhealthy")
 		r.stopWatchdogFeeding()
@@ -449,26 +450,6 @@ func (r *PoisonPillRemediationReconciler) reboot() (ctrl.Result, error) {
 	return ctrl.Result{RequeueAfter: reconcileInterval}, nil
 }
 
-//updates nodes global variable to include list of the nodes objects that exists in api-server
-func (r *PoisonPillRemediationReconciler) updateNodesList() error {
-	nodeList := &v1.NodeList{}
-
-	if err := r.List(context.TODO(), nodeList); err != nil {
-		r.logger.Error(err, "failed to get nodes list")
-		return err
-	}
-
-	//store the node list, so that it will be available if api-server is not accessible at some point
-	nodes = nodeList.DeepCopy()
-	for i, node := range nodes.Items {
-		//remove the node this pod runs on from the list
-		if node.Name == myNodeName {
-			nodes.Items = append(nodes.Items[:i], nodes.Items[i+1:]...)
-		}
-	}
-	return nil
-}
-
 //getHealthStatusFromPeer issues a GET request to the specified IP and returns the result from the peer into the given channel
 func (r *PoisonPillRemediationReconciler) getHealthStatusFromPeer(endpointIp string, results chan<- poisonPill.HealthCheckResponse) {
 	url := fmt.Sprintf("%s://%s:%d/health/%s", peersProtocol, endpointIp, peersPort, myNodeName)
@@ -520,23 +501,25 @@ func (r *PoisonPillRemediationReconciler) handleDeletedNode(ppr *v1alpha1.Poison
 	return r.restoreNode(ppr.Status.NodeBackup)
 }
 
-func popNodes(nodes *v1.NodeList, count int) []string {
-	addresses := make([]string, 10)
-	if len(nodes.Items) == 0 {
-		return addresses
+func popNodes(nodes *[]v1.Node, count int) []string {
+	nrOfNodes := len(*nodes)
+	if nrOfNodes == 0 {
+		return []string{}
 	}
 
 	nodesCount := count
-	if nodesCount > len(nodes.Items) {
-		nodesCount = len(nodes.Items)
+	if nodesCount > nrOfNodes {
+		nodesCount = nrOfNodes
 	}
 
-	//todo maybe we should pick nodes randomly rather than relying on the order returned from api-server
+	// TODO this should be random, check if address exists, etc.
+	addresses := make([]string, nodesCount)
 	for i := 0; i < nodesCount; i++ {
-		addresses[i] = nodes.Items[i].Status.Addresses[0].Address //todo node might have multiple addresses or none?
+		chosenNode := (*nodes)[i]
+		addresses[i] = chosenNode.Status.Addresses[0].Address //todo node might have multiple addresses
 	}
 
-	nodes.Items = nodes.Items[nodesCount:] //remove popped nodes from the list
+	*nodes = (*nodes)[nodesCount:] //remove popped nodes from the list
 
 	return addresses
 }

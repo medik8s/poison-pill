@@ -97,18 +97,15 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).ToNot(HaveOccurred())
 
-	apiReaderWrapper = ApiReaderWrapper{
-		apiReader:             k8sManager.GetAPIReader(),
-		ShouldSimulateFailure: false,
-	}
-
 	dummyDog = wdt.StartDummyWatchdog()
 
+	//peers = ... we don't this, seems we need to add more tests
+
 	err = (&PoisonPillRemediationReconciler{
-		Client:    k8sManager.GetClient(),
-		Log:       ctrl.Log.WithName("controllers").WithName("poison-pill-controller"),
-		ApiReader: &apiReaderWrapper,
-		Watchdog:  dummyDog,
+		Client:   k8sManager.GetClient(),
+		Log:      ctrl.Log.WithName("controllers").WithName("poison-pill-controller"),
+		Watchdog: dummyDog,
+		// peers...
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
