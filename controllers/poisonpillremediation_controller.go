@@ -35,7 +35,6 @@ import (
 	"github.com/medik8s/poison-pill/api/v1alpha1"
 	"github.com/medik8s/poison-pill/pkg/peers"
 	"github.com/medik8s/poison-pill/pkg/utils"
-	wdt "github.com/medik8s/poison-pill/pkg/watchdog"
 )
 
 const (
@@ -60,10 +59,9 @@ type PoisonPillRemediationReconciler struct {
 	client.Client
 	Log logr.Logger
 	//logger is a logger that holds the CR name being reconciled
-	logger   logr.Logger
-	Scheme   *runtime.Scheme
-	Watchdog wdt.Watchdog
-	Peers    *peers.Peers
+	logger logr.Logger
+	Scheme *runtime.Scheme
+	Peers  *peers.Peers
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -83,7 +81,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 	r.logger = r.Log.WithValues("poisonpillremediation", req.NamespacedName)
 
 	//define context with timeout, otherwise this blocks forever
-	ctx, cancelFunc := context.WithTimeout(context.TODO(), apiServerTimeout)
+	ctx, cancelFunc := context.WithTimeout(ctx, apiServerTimeout)
 	defer cancelFunc()
 
 	ppr := &v1alpha1.PoisonPillRemediation{}
@@ -94,7 +92,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 			// PPR is deleted, stop reconciling
 			return ctrl.Result{}, nil
 		}
-		if healthy := r.Peers.HandleError(err); !healthy {
+		if healthy := r.Peers.HandleError(ctx, err); !healthy {
 			// we have a problem on this node
 			if err := r.Peers.Reboot(); err != nil {
 				// re-queue
@@ -154,7 +152,9 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 				return ctrl.Result{}, err
 			} else {
 				// we are done for now, node will reboot
-				return ctrl.Result{}, nil
+				// TODO requeue for unit test only, so the controller on the affected "node" cares about itself?
+				// on the other hand, we will just retrigger reboot... so it doesn't hurt
+				//return ctrl.Result{}, nil
 			}
 		}
 		return ctrl.Result{RequeueAfter: maxNodeRebootTime.Sub(time.Now()) + time.Second}, nil
@@ -174,7 +174,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 		}
 	}
 
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
 func (r *PoisonPillRemediationReconciler) updatePprStatus(node *v1.Node, ppr *v1alpha1.PoisonPillRemediation) (ctrl.Result, error) {

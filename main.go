@@ -84,26 +84,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO disarm the watchdog when we exit?!
-	wd, err := watchdog.StartWatchdog(ctrl.Log.WithName("watchdog"))
+	watchdog, err := watchdog.New(ctrl.Log.WithName("watchdog"))
 	if err != nil {
-		setupLog.Error(err, "failed to start watchdog, using soft reboot")
+		setupLog.Error(err, "failed to init watchdog, using soft reboot")
 	}
 
 	// TODO make the interval configurable?
 	// TODO use a long interval here, and do a seperate cheaper "healthcheck" with a lower interval in another loop?
-	peers, err := peers.New(wd, 5*time.Minute, mgr.GetClient(), ctrl.Log.WithName("peers"))
-	if err != nil {
-		setupLog.Error(err, "failed to init peer list")
-		os.Exit(1)
-	}
+	peers := peers.New(watchdog, 5*time.Minute, 15*time.Second, 3, mgr.GetClient(), ctrl.Log.WithName("peers"))
 
 	if err = (&controllers.PoisonPillRemediationReconciler{
-		Client:   mgr.GetClient(),
-		Log:      ctrl.Log.WithName("controllers").WithName("PoisonPillRemediation"),
-		Scheme:   mgr.GetScheme(),
-		Watchdog: wd,
-		Peers:    peers,
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("PoisonPillRemediation"),
+		Scheme: mgr.GetScheme(),
+		Peers:  peers,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PoisonPillRemediation")
 		os.Exit(1)
@@ -119,6 +113,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// let the manager handle watchdog and peers start
+	if watchdog != nil {
+		if err = mgr.Add(watchdog); err != nil {
+			setupLog.Error(err, "failed to start watchdog")
+			os.Exit(1)
+		}
+	}
+
+	if err = mgr.Add(peers); err != nil {
+		setupLog.Error(err, "failed to start peer list")
+		os.Exit(1)
+	}
+
+	// TODO make this also a Runnable and let the manager start it
 	setupLog.Info("starting web server")
 	go pa.Start()
 

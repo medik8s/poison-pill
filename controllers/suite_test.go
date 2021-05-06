@@ -19,16 +19,18 @@ package controllers
 import (
 	"context"
 	"errors"
-	wdt "github.com/medik8s/poison-pill/pkg/watchdog"
+	"os"
 	"path/filepath"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
@@ -36,36 +38,33 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	poisonpillv1alpha1 "github.com/medik8s/poison-pill/api/v1alpha1"
+	"github.com/medik8s/poison-pill/pkg/peers"
+	wdt "github.com/medik8s/poison-pill/pkg/watchdog"
 	//+kubebuilder:scaffold:imports
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 
+const (
+	peerUpdateInterval = 1 * time.Second
+)
+
 var cfg *rest.Config
-var k8sClient client.Client
 var testEnv *envtest.Environment
 var dummyDog wdt.Watchdog
-var apiReaderWrapper ApiReaderWrapper
+var k8sClient *K8sClientWrapper
 
-type ApiReaderWrapper struct {
-	apiReader             client.Reader
+type K8sClientWrapper struct {
+	client.Client
 	ShouldSimulateFailure bool
 }
 
-func (arw *ApiReaderWrapper) Get(ctx context.Context, key client.ObjectKey, obj client.Object) error {
-	if arw.ShouldSimulateFailure {
-		return errors.New("simulation of api reader error")
+func (kcw *K8sClientWrapper) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if kcw.ShouldSimulateFailure {
+		return errors.New("simulation of client error")
 	}
-	return arw.apiReader.Get(ctx, key, obj)
-}
-
-func (arw *ApiReaderWrapper) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	if arw.ShouldSimulateFailure {
-		return errors.New("simulation of api reader error")
-	}
-
-	return arw.apiReader.List(ctx, list)
+	return kcw.Client.List(ctx, list, opts...)
 }
 
 func TestAPIs(t *testing.T) {
@@ -77,6 +76,8 @@ func TestAPIs(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	//Expect(os.Setenv("KUBEBUILDER_ATTACH_CONTROL_PLANE_OUTPUT", "true")).To(Succeed())
+
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 	By("bootstrapping test environment")
@@ -97,16 +98,35 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).ToNot(HaveOccurred())
 
-	dummyDog = wdt.StartDummyWatchdog()
+	k8sClient = &K8sClientWrapper{
+		k8sManager.GetClient(),
+		false,
+	}
+	Expect(k8sClient).ToNot(BeNil())
 
-	//peers = ... we don't this, seems we need to add more tests
+	// peers need their own node on start
+	node1 := &v1.Node{}
+	node1.Name = nodeName
+	node1.Labels = make(map[string]string)
+	node1.Labels["kubernetes.io/hostname"] = nodeName
+	Expect(k8sClient.Create(context.Background(), node1)).To(Succeed(), "failed to create node")
+	Expect(os.Setenv(nodeNameEnvVar, node1.Name)).To(Succeed(), "failed to set env variable of the node name")
+
+	dummyDog, err = wdt.NewFake(ctrl.Log.WithName("fake watchdog"))
+	Expect(err).ToNot(HaveOccurred())
+	peers := peers.New(dummyDog, peerUpdateInterval, 1*time.Second, 1, k8sClient, ctrl.Log.WithName("peers"))
+	Expect(err).ToNot(HaveOccurred())
 
 	err = (&PoisonPillRemediationReconciler{
-		Client:   k8sManager.GetClient(),
-		Log:      ctrl.Log.WithName("controllers").WithName("poison-pill-controller"),
-		Watchdog: dummyDog,
-		// peers...
+		Client: k8sClient,
+		Log:    ctrl.Log.WithName("controllers").WithName("poison-pill-controller"),
+		Peers:  peers,
 	}).SetupWithManager(k8sManager)
+	Expect(err).ToNot(HaveOccurred())
+
+	err = k8sManager.Add(dummyDog)
+	Expect(err).ToNot(HaveOccurred())
+	err = k8sManager.Add(peers)
 	Expect(err).ToNot(HaveOccurred())
 
 	reconcileInterval = 1 * time.Second
@@ -119,9 +139,6 @@ var _ = BeforeSuite(func() {
 	}()
 
 	//+kubebuilder:scaffold:scheme
-
-	k8sClient = k8sManager.GetClient()
-	Expect(k8sClient).ToNot(BeNil())
 
 }, 60)
 

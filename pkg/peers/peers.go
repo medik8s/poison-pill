@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	poisonPill "github.com/medik8s/poison-pill/api"
@@ -29,9 +30,6 @@ const (
 	// TODO make this configurable?
 	nrOfPeers = 15
 
-	ignoreNewErrorsFor = 15 * time.Second
-	maxErrorsThreshold = 3 //after which we start asking peers for health status
-
 	peerProtocol = "http"
 	peerPort     = 30001
 	peerTimeout  = 10 * time.Second
@@ -39,27 +37,35 @@ const (
 
 type Peers struct {
 	client.Client
-	log          logr.Logger
-	peerList     *[]v1.Node
-	peerSelector labels.Selector
-	mutex        sync.Mutex
-	myNodeName   string
-	wd           watchdog.Watchdog
-	lastErrorAt  time.Time
-	errorCount   int
-	httpClient   *http.Client
+	log                logr.Logger
+	peerList           *[]v1.Node
+	peerSelector       labels.Selector
+	peerUpdateInterval time.Duration
+	ignoreNewErrorsFor time.Duration
+	maxErrorsThreshold int
+	mutex              sync.Mutex
+	myNodeName         string
+	watchdog           watchdog.Watchdog
+	lastErrorAt        time.Time
+	errorCount         int
+	httpClient         *http.Client
 }
 
-func New(wd watchdog.Watchdog, peerUpdateInterval time.Duration, c client.Client, log logr.Logger) (*Peers, error) {
-
-	p := &Peers{
-		Client:     c,
-		log:        log,
-		mutex:      sync.Mutex{},
-		myNodeName: os.Getenv(nodeNameEnvVar),
-		wd:         wd,
-		httpClient: &http.Client{Timeout: peerTimeout},
+func New(wd watchdog.Watchdog, peerUpdateInterval time.Duration, ignoreNewErrorsFor time.Duration, maxErrorsThreshold int, c client.Client, log logr.Logger) *Peers {
+	return &Peers{
+		Client:             c,
+		log:                log,
+		peerUpdateInterval: peerUpdateInterval,
+		ignoreNewErrorsFor: ignoreNewErrorsFor,
+		maxErrorsThreshold: maxErrorsThreshold,
+		mutex:              sync.Mutex{},
+		myNodeName:         os.Getenv(nodeNameEnvVar),
+		watchdog:           wd,
+		httpClient:         &http.Client{Timeout: peerTimeout},
 	}
+}
+
+func (p *Peers) Start(ctx context.Context) error {
 
 	// get own hostname label value and create a label selector from it
 	// will be used for updating the peer list and skipping ourself
@@ -68,48 +74,47 @@ func New(wd watchdog.Watchdog, peerUpdateInterval time.Duration, c client.Client
 		Name: p.myNodeName,
 	}
 	if err := p.Get(context.Background(), key, myNode); err != nil {
-		log.Error(err, "failed to get own node")
-		return nil, err
+		p.log.Error(err, "failed to get own node")
+		return err
 	}
 	if hostname, ok := myNode.Labels[hostnameLabelName]; !ok {
 		err := fmt.Errorf("%s label not set on own node", hostnameLabelName)
-		log.Error(err, "failed to get own hostname")
-		return nil, err
+		p.log.Error(err, "failed to get own hostname")
+		return err
 	} else {
 		req, _ := labels.NewRequirement(hostnameLabelName, selection.NotEquals, []string{hostname})
 		p.peerSelector = labels.NewSelector().Add(*req)
 	}
 
 	// get initial peer list
-	p.updatePeers()
+	p.updatePeers(ctx, false)
 
-	// start loop for updating peer list regularly
-	ticker := time.NewTicker(peerUpdateInterval)
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				p.updatePeers()
-			}
-		}
-	}()
+	go wait.UntilWithContext(ctx, func(ctx context.Context) {
+		p.updatePeers(ctx, false)
+	}, p.peerUpdateInterval)
 
-	return p, nil
+	p.log.Info("peers started")
+
+	<-ctx.Done()
+	return nil
 }
 
-func (p *Peers) updatePeers() {
+func (p *Peers) updatePeers(ctx context.Context, ignoreError bool) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	nodes := &v1.NodeList{}
 	// get some nodes, but not ourself
-	if err := p.List(context.Background(), nodes, client.Limit(nrOfPeers), client.MatchingLabelsSelector{Selector: p.peerSelector}); err != nil {
+	if err := p.List(ctx, nodes, client.Limit(nrOfPeers), client.MatchingLabelsSelector{Selector: p.peerSelector}); err != nil {
 		if errors.IsNotFound(err) {
 			// we are the only node at the moment... reset peerList
 			p.peerList = &[]v1.Node{}
 		}
 		p.log.Error(err, "failed to update peer list")
-		if healthy := p.HandleError(err); !healthy {
+		if ignoreError {
+			return
+		}
+		if healthy := p.HandleError(ctx, err); !healthy {
 			// we have a problem on this node
 			p.log.Error(err, "we are unhealthy, triggering a reboot")
 			if err := p.Reboot(); err != nil {
@@ -120,6 +125,7 @@ func (p *Peers) updatePeers() {
 		}
 		return
 	}
+	//p.log.Info("peers updated")
 	p.peerList = &nodes.Items
 }
 
@@ -132,10 +138,10 @@ func (p *Peers) getPeers() *[]v1.Node {
 
 // HandleError keeps track of the number of errors reported, and when a certain amount of error occur within a certain
 // time, ask peers if this node is healthy. Returns if the node is considered to be healthy or not.
-func (p *Peers) HandleError(newError error) bool {
+func (p *Peers) HandleError(ctx context.Context, newError error) bool {
 
 	//we don't want to increase the err count too quick
-	if !p.lastErrorAt.IsZero() && time.Now().Before(p.lastErrorAt.Add(ignoreNewErrorsFor)) {
+	if !p.lastErrorAt.IsZero() && time.Now().Before(p.lastErrorAt.Add(p.ignoreNewErrorsFor)) {
 		p.log.Info("Ignoring error, it came too fast after the last one", "error", newError)
 		return true
 	}
@@ -143,15 +149,15 @@ func (p *Peers) HandleError(newError error) bool {
 	p.lastErrorAt = time.Now()
 	p.errorCount++
 
-	if p.errorCount < maxErrorsThreshold {
-		p.log.Info("Ignoring error, error count below threshold", "current count", p.errorCount, "threshold", maxErrorsThreshold)
+	if p.errorCount < p.maxErrorsThreshold {
+		p.log.Info("Ignoring error, error count below threshold", "current count", p.errorCount, "threshold", p.maxErrorsThreshold)
 		return true
 	}
 
 	p.log.Info("Error count exceeds threshold, trying to ask other nodes if I'm healthy")
 
 	// update peers, if it fails we still have the cached list
-	p.updatePeers()
+	p.updatePeers(ctx, true)
 	nodes := *p.getPeers() // de-reference nodes here, so we don't accidentally modify the original list later on
 	if nodes == nil || len(nodes) == 0 {
 		p.log.Info("Peers list is empty and / or couldn't be retrieved from server, nothing we can do, so consider the node being healthy")
@@ -202,8 +208,9 @@ func (p *Peers) HandleError(newError error) bool {
 		return true
 	}
 
-	// unclear status, assume we are healthy
-	return true
+	// TODO really? ...
+	// unclear status, assume we are unhealthy
+	return false
 }
 
 func (p *Peers) popNodes(nodes *[]v1.Node, count int) []string {
@@ -300,17 +307,19 @@ func (p *Peers) reset() {
 
 // Reboot stops watchdog feeding ig watchdog exists, otherwise issuing a software reboot
 func (p *Peers) Reboot() error {
-	if p.wd == nil {
+	if p.watchdog == nil || !p.watchdog.IsStarted() {
 		p.log.Info("no watchdog is present on this host, trying software reboot")
 		//we couldn't init a watchdog so far but requested to be rebooted. we issue a software reboot
 		if err := p.softwareReboot(); err != nil {
 			p.log.Error(err, "failed to run reboot command")
-			return err
+			// TODO retry because of this?
+			//return err
+			return nil
 		}
 		return nil
 	}
 	//we stop feeding the watchdog and waiting for a reboot
-	p.wd.Stop()
+	p.watchdog.Stop()
 	p.log.Info("watchdog feeding has stopped, waiting for reboot to commence")
 	return nil
 }
