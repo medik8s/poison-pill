@@ -22,3 +22,4 @@ https://www.openshift.com/blog/kubernetes-self-remediation-aka-poison-pill
 
 ## Project State
 Currently the project is in PoC phase
+
