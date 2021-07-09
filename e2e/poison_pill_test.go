@@ -117,8 +117,8 @@ var _ = Describe("Poison Pill E2E", func() {
 			})
 
 			It("should not reboot and not re-create node", func() {
-				// order matters
-				// - because the 2nd check has a small timeout only
+				// order matters because the first check waits for 5 minutes, the second only shortly,
+				// and within that time the API connection is restored, needed for getting logs
 				checkNoNodeRecreate(node, oldUID)
 				checkNoReboot(node, oldBootTime)
 
@@ -149,9 +149,7 @@ var _ = Describe("Poison Pill E2E", func() {
 			})
 
 			It("should reboot and re-create node", func() {
-				// order matters
-				// - because node check works while api is disconnected from node, reboot check not
-				// - because the 2nd check has a small timeout only
+				// order matters because the first check waits for 5 minutes, the second only shortly
 				checkNodeRecreate(node, oldUID)
 				checkReboot(node, oldBootTime)
 
@@ -173,29 +171,19 @@ var _ = Describe("Poison Pill E2E", func() {
 			bootTimes := make(map[string]*time.Time)
 
 			BeforeEach(func() {
-				wg := sync.WaitGroup{}
 				for i := range workers.Items {
-					wg.Add(1)
 					worker := &workers.Items[i]
-
 					// save old UID first
 					Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(worker), worker)).ToNot(HaveOccurred())
 					uids[worker.GetName()] = worker.GetUID()
 
-					// and the lat boot time
+					// and the last boot time
 					t, err := getBootTime(worker)
 					Expect(err).ToNot(HaveOccurred())
 					bootTimes[worker.GetName()] = t
 
-					go func() {
-						defer GinkgoRecover()
-						defer wg.Done()
-						killApiConnection(worker, apiIPs, true)
-					}()
+					killApiConnection(worker, apiIPs, true)
 				}
-				wg.Wait()
-				// give things a bit time to settle after API connection is restored
-				time.Sleep(10 * time.Second)
 			})
 
 			AfterEach(func() {
@@ -213,8 +201,8 @@ var _ = Describe("Poison Pill E2E", func() {
 						defer GinkgoRecover()
 						defer wg.Done()
 
-						// order matters
-						// - because the 2nd check has a small timeout only
+						// order matters because the first check waits for 5 minutes, the second only shortly,
+						// and within that time the API connection is restored, needed for getting logs
 						checkNoNodeRecreate(worker, uids[worker.GetName()])
 						checkNoReboot(worker, bootTimes[worker.GetName()])
 
@@ -304,24 +292,31 @@ func killApiConnection(node *v1.Node, apiIPs []string, withReconnect bool) {
 
 	command := []string{"/bin/bash", "-c", script}
 
-	var ctx context.Context
-	var cancel context.CancelFunc
-	if withReconnect {
-		ctx, cancel = context.WithTimeout(context.Background(), reconnectInterval+nodeExecTimeout)
-	} else {
-		ctx, cancel = context.WithTimeout(context.Background(), nodeExecTimeout)
-	}
-	defer cancel()
-	_, err := utils.ExecCommandOnNode(k8sClient, command, node, ctx)
-	// deadline exceeded is ok... the command does not return because of the killed connection
-	Expect(err).To(
-		Or(
-			Not(HaveOccurred()),
-			WithTransform(func(err error) string { return err.Error() },
-				ContainSubstring("deadline exceeded"),
+	go func() {
+
+		defer GinkgoRecover()
+
+		var ctx context.Context
+		var cancel context.CancelFunc
+		if withReconnect {
+			ctx, cancel = context.WithTimeout(context.Background(), reconnectInterval+nodeExecTimeout)
+		} else {
+			ctx, cancel = context.WithTimeout(context.Background(), nodeExecTimeout)
+		}
+		defer cancel()
+
+		_, err := utils.ExecCommandOnNode(k8sClient, command, node, ctx)
+		// deadline exceeded is ok... the command does not return because of the killed connection
+		ExpectWithOffset(1, err).To(
+			Or(
+				Not(HaveOccurred()),
+				WithTransform(func(err error) string { return err.Error() },
+					ContainSubstring("deadline exceeded"),
+				),
 			),
-		),
-	)
+		)
+
+	}()
 }
 
 func composeScript(commandTemplate string, ips []string) string {
@@ -336,10 +331,12 @@ func composeScript(commandTemplate string, ips []string) string {
 }
 
 func checkNoNodeRecreate(node *v1.Node, oldUID types.UID) {
-	By("checking if node was recreated")
+	By("ensuring node isn't recreated")
 	logger.Info("UID", "old", oldUID)
-	ExpectWithOffset(1, k8sClient.Get(context.Background(), client.ObjectKeyFromObject(node), node)).ToNot(HaveOccurred())
-	Expect(node.UID).To(Equal(oldUID))
+	ConsistentlyWithOffset(1, func() types.UID {
+		ExpectWithOffset(1, k8sClient.Get(context.Background(), client.ObjectKeyFromObject(node), node)).ToNot(HaveOccurred())
+		return node.GetUID()
+	}, reconnectInterval+10*time.Second, 20*time.Second).Should(Equal(oldUID))
 }
 
 func checkNoReboot(node *v1.Node, oldBootTime *time.Time) {
