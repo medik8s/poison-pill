@@ -20,3 +20,4 @@ Should be installed together with [Node Healthcheck Operator](https://operatorhu
 
 ## Help
 Feel free to open new issue for any technical questions
+
