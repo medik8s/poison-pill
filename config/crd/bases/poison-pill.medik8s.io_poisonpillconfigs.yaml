@@ -40,6 +40,12 @@ spec:
           spec:
             description: PoisonPillConfigSpec defines the desired state of PoisonPillConfig
             properties:
+              'isSoftwareRebootEnabled ':
+                default: true
+                description: IsSoftwareRebootEnabled indicates whether poison pill
+                  agent will do software reboot, if the watchdog device can not be
+                  used or will use watchdog only, without a fallback to software reboot
+                type: boolean
               safeTimeToAssumeNodeRebootedSeconds:
                 default: 180
                 description: SafeTimeToAssumeNodeRebootedSeconds is the time after

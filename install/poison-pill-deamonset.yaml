@@ -42,6 +42,8 @@ spec:
             value: {{.WatchdogPath}}
           - name: TIME_TO_ASSUME_NODE_REBOOTED
             value: {{.TimeToAssumeNodeRebooted}}
+          - name: IS_SOFTWARE_REBOOT_ENABLED
+            value: {{.IsSoftwareRebootEnabled}}
         image: {{.Image}}
         imagePullPolicy: Always
         volumeMounts:

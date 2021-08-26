@@ -116,6 +116,9 @@ func (r *PoisonPillConfigReconciler) syncConfigDaemonSet(ppc *poisonpillv1alpha1
 	}
 	data.Data["TimeToAssumeNodeRebooted"] = fmt.Sprintf("\"%d\"", timeToAssumeNodeRebooted)
 
+	isSoftwareRebootEnabled := ppc.Spec.IsSoftwareRebootEnabled
+	data.Data["IsSoftwareRebootEnabled"] = fmt.Sprintf("%t", isSoftwareRebootEnabled)
+
 	objs, err := render.RenderDir(r.InstallFileFolder, &data)
 	if err != nil {
 		logger.Error(err, "Fail to render config daemon manifests")
