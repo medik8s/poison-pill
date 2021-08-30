@@ -173,7 +173,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 
-	hasPoisonPillPod, err := r.hasPoisonPillAgentPod(node)
+	hasPoisonPillPod, err := r.hasRunningPoisonPillAgentPod(node)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -181,7 +181,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 	//if the unhealthy node doesn't have the poison pill agent pod, the node might not reboot, and we might end up
 	//in deleting a running node
 	if !hasPoisonPillPod {
-		r.logger.Error(errors.New("node is missing poison pill agent pod, which means the node might not reboot when we'll delete the node. Skipping remediation"), "")
+		r.logger.Error(errors.New("node is missing a running poison pill agent pod, which means the node might not reboot when we'll delete the node. Skipping remediation"), "")
 		return ctrl.Result{}, nil
 	}
 
@@ -253,7 +253,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
-func (r *PoisonPillRemediationReconciler) hasPoisonPillAgentPod(node *v1.Node) (bool, error) {
+func (r *PoisonPillRemediationReconciler) hasPoisohasRunningPoisonPillAgentPodnPillAgentPod(node *v1.Node) (bool, error) {
 	pod, err := utils.GetPoisonPillAgentPod(node.Name, r.Client)
 	if err != nil {
 		r.logger.Error(err, "failed to list poison pill agent pods")

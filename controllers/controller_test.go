@@ -109,6 +109,9 @@ var _ = Describe("ppr Controller", func() {
 				}
 				pod.Spec.Containers = []v1.Container{container}
 				Expect(k8sClient.Create(context.Background(), pod)).To(Succeed())
+
+				pod.Status.Phase = v1.PodRunning
+				Expect(k8sClient.Status().Update(context.Background(), pod)).To(Succeed())
 			})
 
 			It("poison pill agent pod should exist", func() {
