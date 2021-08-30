@@ -52,7 +52,7 @@ type PoisonPillConfigSpec struct {
 	// if the watchdog device can not be used or will use watchdog only,
 	// without a fallback to software reboot
 	// +kubebuilder:default=true
-	IsSoftwareRebootEnabled bool `json:"isSoftwareRebootEnabled ,omitempty"`
+	IsSoftwareRebootEnabled bool `json:"isSoftwareRebootEnabled,omitempty"`
 }
 
 // PoisonPillConfigStatus defines the observed state of PoisonPillConfig

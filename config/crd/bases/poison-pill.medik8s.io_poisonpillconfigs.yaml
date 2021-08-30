@@ -40,7 +40,7 @@ spec:
           spec:
             description: PoisonPillConfigSpec defines the desired state of PoisonPillConfig
             properties:
-              'isSoftwareRebootEnabled ':
+              isSoftwareRebootEnabled:
                 default: true
                 description: IsSoftwareRebootEnabled indicates whether poison pill
                   agent will do software reboot, if the watchdog device can not be

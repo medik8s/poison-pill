@@ -20,6 +20,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/medik8s/poison-pill/pkg/utils"
+	v1 "k8s.io/api/core/v1"
 	"os"
 	"strconv"
 	"time"
@@ -175,6 +177,7 @@ func initPoisonPillAgent(mgr manager.Manager) {
 		os.Exit(1)
 	}
 
+	watchdogInitiated := false
 	wd, err := watchdog.NewLinux(ctrl.Log.WithName("watchdog"))
 	if err != nil {
 		setupLog.Error(err, "failed to init watchdog, using soft reboot")
@@ -185,6 +188,12 @@ func initPoisonPillAgent(mgr manager.Manager) {
 			os.Exit(1)
 		}
 	}
+	watchdogInitiated = true
+	if err = updatePodIsRebootCapableLabel(watchdogInitiated, myNodeName, mgr.GetClient()); err != nil {
+		setupLog.Error(err, "failed to update pod's 'is-reboot-capable' label")
+		os.Exit(1)
+	}
+
 	// it's fine when the watchdog is nil!
 	rebooter := reboot.NewWatchdogRebooter(wd, ctrl.Log.WithName("rebooter"))
 
@@ -328,4 +337,40 @@ func getDeploymentNamespace() (string, error) {
 		return "", fmt.Errorf("%s must be set", deployNamespaceEnvVar)
 	}
 	return ns, nil
+}
+
+//updatePodIsRebootCapableLabel updates the is-reboot-capable label to be true if any kind
+// of reboot is enabled and false if there isn't watchdog and software reboot is disabled
+func updatePodIsRebootCapableLabel(watchdogInitiated bool, nodeName string, client client.Client) error {
+	//get pod in order to update it's label
+	pod, err := utils.GetPoisonPillAgentPod(nodeName, client)
+	if err != nil {
+		setupLog.Error(err, "failed to list poison pill agent pods")
+		return err
+	}
+
+	softwareRebootEnabledEnv := os.Getenv("SOFTWARE_REBOOT_ENABLED")
+	softwareRebootEnabled, err := strconv.ParseBool(softwareRebootEnabledEnv)
+	if err != nil {
+		setupLog.Error(err, "failed to convert env variable SOFTWARE_REBOOT_ENABLED value: %s to boolean",
+			softwareRebootEnabledEnv)
+		return err
+	}
+	if watchdogInitiated || softwareRebootEnabled {
+		err = updateLabel("is-reboot-capable", "true", pod, client)
+		return err
+	}
+
+	err = updateLabel("is-reboot-capable", "false", pod, client)
+	return err
+}
+
+func updateLabel(labelKey string, labelValue string, pod *v1.Pod, c client.Client) error {
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[labelKey] = labelValue
+	//update in yaml
+	err := c.Update(context.Background(), pod)
+	return err
 }
