@@ -253,7 +253,7 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
-func (r *PoisonPillRemediationReconciler) hasPoisohasRunningPoisonPillAgentPodnPillAgentPod(node *v1.Node) (bool, error) {
+func (r *PoisonPillRemediationReconciler) hasRunningPoisonPillAgentPod(node *v1.Node) (bool, error) {
 	pod, err := utils.GetPoisonPillAgentPod(node.Name, r.Client)
 	if err != nil {
 		r.logger.Error(err, "failed to list poison pill agent pods")
