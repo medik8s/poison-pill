@@ -19,7 +19,10 @@ COPY install/ install/
 # Build
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o manager main.go
 
-FROM registry.access.redhat.com/ubi8/ubi:latest
+FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
+# poison pill dependencies
+# util-linux used for /usr/bin/nsenter, used for soft reboot with systemctl
+RUN microdnf install util-linux
 
 WORKDIR /
 COPY --from=builder /workspace/install/ install/
