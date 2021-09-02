@@ -28,6 +28,7 @@ const (
 	templateCRName                        = "poison-pill-default-template"
 	defaultWatchdogPath                   = "/dev/watchdog"
 	defaultSafetToAssumeNodeRebootTimeout = 180
+	defaultIsSoftwareRebootEnabled        = true
 )
 
 // PoisonPillConfigSpec defines the desired state of PoisonPillConfig
@@ -46,6 +47,12 @@ type PoisonPillConfigSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default=180
 	SafeTimeToAssumeNodeRebootedSeconds int `json:"safeTimeToAssumeNodeRebootedSeconds,omitempty"`
+
+	// IsSoftwareRebootEnabled indicates whether poison pill agent will do software reboot,
+	// if the watchdog device can not be used or will use watchdog only,
+	// without a fallback to software reboot
+	// +kubebuilder:default=true
+	IsSoftwareRebootEnabled bool `json:"isSoftwareRebootEnabled,omitempty"`
 }
 
 // PoisonPillConfigStatus defines the observed state of PoisonPillConfig
@@ -86,6 +93,7 @@ func NewDefaultPoisonPillConfig() PoisonPillConfig {
 		Spec: PoisonPillConfigSpec{
 			WatchdogFilePath:                    defaultWatchdogPath,
 			SafeTimeToAssumeNodeRebootedSeconds: defaultSafetToAssumeNodeRebootTimeout,
+			IsSoftwareRebootEnabled:             defaultIsSoftwareRebootEnabled,
 		},
 	}
 }

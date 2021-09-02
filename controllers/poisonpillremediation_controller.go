@@ -28,9 +28,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apiErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/selection"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -263,24 +261,16 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 }
 
 func (r *PoisonPillRemediationReconciler) hasRunningPoisonPillAgentPod(node *v1.Node) (bool, error) {
-	podList := &v1.PodList{}
-
-	selector := labels.NewSelector()
-	requirement, _ := labels.NewRequirement("app", selection.Equals, []string{"poison-pill-agent"})
-	selector = selector.Add(*requirement)
-
-	err := r.Client.List(context.Background(), podList, &client.ListOptions{LabelSelector: selector})
+	pod, err := utils.GetPoisonPillAgentPod(node.Name, r.Client)
 	if err != nil {
 		r.logger.Error(err, "failed to list poison pill agent pods")
 		return false, err
 	}
 
-	for _, pod := range podList.Items {
-		if pod.Spec.NodeName == node.Name {
-			return pod.Status.Phase == v1.PodRunning, nil
-		}
+	if pod == nil {
+		return false, nil
 	}
-	return false, nil
+	return true, nil
 }
 
 //returns the lastHeartbeatTime of the first condition, if exists. Otherwise returns the zero value
