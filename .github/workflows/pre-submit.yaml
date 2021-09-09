@@ -21,7 +21,10 @@ jobs:
         go-version: 1.15
 
     - name: Build and test
-      run: make manifests generate docker-build
+      run: make manifests generate docker-build test
+
+    - name: Run codacy-coverage-reporter
+      run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report --project-token ${{ secrets.CODACY_PROJECT_TOKEN }}  --language go --force-coverage-parser go -r cover.out
 
     - name: TestMutations
       run: make test-mutation-ci
