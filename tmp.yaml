@@ -1,0 +1,375 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+annotations:
+alm-examples: |-
+  [
+    {
+      "apiVersion": "poison-pill.medik8s.io/",
+      "kind": "PoisonPillConfig",
+      "metadata": {
+        "name": "poison-pill-config",
+        "namespace": "poison-pill"
+      },
+      "spec": {}
+    },
+    {
+      "apiVersion": "poison-pill.medik8s.io/",
+      "kind": "PoisonPillRemediation",
+      "metadata": {
+        "name": "poisonpillremediation-sample"
+      },
+      "spec": {}
+    },
+    {
+      "apiVersion": "poison-pill.medik8s.io/",
+      "kind": "
+"metadata": {
+        "name": "
+},
+"spec": {
+          "template": {
+            "spec": {}
+          }
+        }
+      }
+    ]
+      capabilities: Basic Install
+      categories: OpenShift Optional
+      containerImage: quay.io/shelly/poison-pill-
+      operatorframework.io/: poison-pill
+      operators.operatorframework.: operator-sdk-v1.9.0+git
+      operators.operatorframework.: go.kubebuilder.io/v3
+      repository: https://github.com/medik8s/
+      name: poison-pill.v0.1.2-47-g9d71154
+      namespace: placeholder
+      spec:
+      apiservicedefinitions: {}
+      customresourcedefinitions:
+      owned:
+        - description: PoisonPillConfig is the Schema for the poisonpillconfigs API in
+      which a user can configure the poison pill agents
+      displayName: Poison Pill Config
+      kind: PoisonPillConfig
+      name: poisonpillconfigs.poison-pill.
+      version: v1alpha1
+        - description: PoisonPillRemediation is the Schema for the poisonpillremediations
+      API
+      displayName: Poison Pill Remediation
+      kind: PoisonPillRemediation
+      name: poisonpillremediations.poison-
+      version: v1alpha1
+        - description: PoisonPillRemediationTemplate is the Schema for the poisonpillremediationtemplates
+      API
+      displayName: Poison Pill Remediation Template
+      kind: PoisonPillRemediationTemplate
+      name: poisonpillremediationtemplates
+      version: v1alpha1
+      description: This poison pill operator is using an alternate mechanism for a node
+      in a cluster to detect its health status and take actions to remediate itself
+      in case of a failure. While not all remediation events can result in the node
+      returning to a healthy state, the operator does allow surviving parts of the cluster
+      to assume the node has reached a safe state so that it’s workloads can be automatically
+      recovered. A prerequesuite for the poison pill operator is a functioning health
+      detection system that implements the external remediation API, such as Node Healthcheck
+      Operator, Machine Healthcehck Controller (in OCP or Cluster-API based clusters).
+      Once a node/machine is unhealthy, the detection system will create the PoisonPillRemediation
+      CR, which triggers the poison pill operator. To get started, a user would need
+      to create a PoisonPillRemediationTemplate, and reference that CR with an NHC/MHC
+      CR. Note that this is in a tech preview phase.
+      displayName: Poison Pill Operator
+      icon:
+        - base64data: iVBORw0KGgoAAAANSUhEUgAAAW8AAA
+      mediatype: image/png
+      install:
+      spec:
+      clusterPermissions:
+        - rules:
+        - apiGroups:
+        - apps
+      resources:
+        - daemonsets
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+        - apiGroups:
+        - apps
+      resources:
+        - daemonsets/finalizers
+      verbs:
+        - update
+        - apiGroups:
+        - ""
+      resources:
+        - nodes
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+        - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list
+        - watch
+        - apiGroups:
+        - ""
+      resources:
+        - secrets
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+        - apiGroups:
+        - machine.openshift.io
+      resources:
+        - machines
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+        - apiGroups:
+        - machine.openshift.io
+      resources:
+        - machines/status
+      verbs:
+        - get
+        - patch
+        - update
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillconfigs
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillconfigs/finalizers
+      verbs:
+        - update
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillconfigs/status
+      verbs:
+        - get
+        - patch
+        - update
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillremediations
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillremediations/
+      verbs:
+        - update
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillremediations/status
+      verbs:
+        - get
+        - patch
+        - update
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillremediationtemplates
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillremediationtemplates
+      verbs:
+        - update
+        - apiGroups:
+        - poison-pill.medik8s.io
+      resources:
+        - poisonpillremediationtemplates
+      verbs:
+        - get
+        - patch
+        - update
+        - apiGroups:
+        - security.openshift.io
+      resourceNames:
+        - privileged
+      resources:
+        - securitycontextconstraints
+      verbs:
+        - use
+        - apiGroups:
+        - authentication.k8s.io
+      resources:
+        - tokenreviews
+      verbs:
+        - create
+        - apiGroups:
+        - authorization.k8s.io
+      resources:
+        - subjectaccessreviews
+      verbs:
+        - create
+      serviceAccountName: poison-pill-controller-manager
+      deployments:
+        - name: poison-pill-controller-manager
+      spec:
+      replicas: 1
+      selector:
+      matchLabels:
+      control-plane: controller-manager
+      strategy: {}
+      template:
+      metadata:
+      labels:
+      control-plane: controller-manager
+      spec:
+      containers:
+        - args:
+        - --secure-listen-address=0.0.0.
+        - --upstream=http://127.0.0.1:
+        - --logtostderr=true
+        - --v=10
+      image: gcr.io/kubebuilder/kube-rbac-
+      name: kube-rbac-proxy
+      ports:
+        - containerPort: 8443
+      name: https
+      resources: {}
+        - args:
+        - --health-probe-bind-address=:
+        - --metrics-bind-address=127.0.
+        - --leader-elect
+        - --is-manager
+      command:
+        - /manager
+      env:
+        - name: MY_NODE_NAME
+      valueFrom:
+      fieldRef:
+      fieldPath: spec.nodeName
+        - name: POISON_PILL_IMAGE
+      value: quay.io/shelly/poison-pill-
+        - name: DEPLOYMENT_NAMESPACE
+      valueFrom:
+      fieldRef:
+      fieldPath: metadata.namespace
+      image: quay.io/shelly/poison-pill-
+      livenessProbe:
+      httpGet:
+      path: /healthz
+      port: 8081
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      name: manager
+      readinessProbe:
+      httpGet:
+      path: /readyz
+      port: 8081
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      resources:
+      requests:
+      cpu: 20m
+      memory: 110Mi
+      securityContext:
+      allowPrivilegeEscalation: false
+      securityContext:
+      runAsNonRoot: false
+      serviceAccountName: poison-pill-controller-manager
+      terminationGracePeriodSeconds: 10
+      permissions:
+        - rules:
+        - apiGroups:
+        - ""
+        - coordination.k8s.io
+      resources:
+        - configmaps
+        - leases
+      verbs:
+        - get
+        - list
+        - watch
+        - create
+        - update
+        - patch
+        - delete
+        - apiGroups:
+        - ""
+      resources:
+        - events
+      verbs:
+        - create
+        - patch
+      serviceAccountName: poison-pill-controller-manager
+      strategy: deployment
+      installModes:
+        - supported: false
+      type: OwnNamespace
+        - supported: false
+      type: SingleNamespace
+        - supported: false
+      type: MultiNamespace
+        - supported: true
+      type: AllNamespaces
+      keywords:
+        - fencing
+        - remediation
+        - auto-healing
+        - recovery
+        - high-availability
+        - baremetal
+      links:
+        - name: Poison Pill
+      url: https://www.medik8s.io/
+      maintainers:
+        - email: medik8s@googlegroups.com
+      name: medik8s team
+      maturity: alpha
+      provider:
+      name: medik8s
+      url: https://www.medik8s.io/
+      version: 0.1.2-47-g9d71154
