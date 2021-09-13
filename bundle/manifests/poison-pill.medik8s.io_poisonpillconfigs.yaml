@@ -20,27 +20,44 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: PoisonPillConfig is the Schema for the poisonpillconfigs API in which a user can configure the poison pill agents
+        description: PoisonPillConfig is the Schema for the poisonpillconfigs API
+          in which a user can configure the poison pill agents
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
             type: string
           metadata:
             type: object
           spec:
             description: PoisonPillConfigSpec defines the desired state of PoisonPillConfig
             properties:
+              isSoftwareRebootEnabled:
+                default: true
+                description: IsSoftwareRebootEnabled indicates whether poison pill
+                  agent will do software reboot, if the watchdog device can not be
+                  used or will use watchdog only, without a fallback to software reboot
+                type: boolean
               safeTimeToAssumeNodeRebootedSeconds:
                 default: 180
-                description: SafeTimeToAssumeNodeRebootedSeconds is the time after which the healthy poison pill agents will assume the unhealthy node has been rebooted and it is safe to remove the node from the cluster. This is extremely important. Deleting a node while the workload is still running there might lead to data corruption and violation of run-once semantic.
+                description: SafeTimeToAssumeNodeRebootedSeconds is the time after
+                  which the healthy poison pill agents will assume the unhealthy node
+                  has been rebooted and it is safe to remove the node from the cluster.
+                  This is extremely important. Deleting a node while the workload
+                  is still running there might lead to data corruption and violation
+                  of run-once semantic.
                 minimum: 0
                 type: integer
               watchdogFilePath:
                 default: /dev/watchdog
-                description: WatchdogFilePath is the watchdog file path that should be available on each node, e.g. /dev/watchdog
+                description: WatchdogFilePath is the watchdog file path that should
+                  be available on each node, e.g. /dev/watchdog
                 type: string
             type: object
           status:

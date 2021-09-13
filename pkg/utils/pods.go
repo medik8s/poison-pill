@@ -8,14 +8,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func GetPoisonPillAgentPod(nodeName string, c client.Client) (*v1.Pod, error) {
+func GetPoisonPillAgentPod(nodeName string, r client.Reader) (*v1.Pod, error) {
 	podList := &v1.PodList{}
 
 	selector := labels.NewSelector()
 	requirement, _ := labels.NewRequirement("app", selection.Equals, []string{"poison-pill-agent"})
 	selector = selector.Add(*requirement)
 
-	err := c.List(context.Background(), podList, &client.ListOptions{LabelSelector: selector})
+	err := r.List(context.Background(), podList, &client.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return nil, err
 	}
@@ -25,5 +25,6 @@ func GetPoisonPillAgentPod(nodeName string, c client.Client) (*v1.Pod, error) {
 			return &pod, nil
 		}
 	}
+
 	return nil, nil
 }
