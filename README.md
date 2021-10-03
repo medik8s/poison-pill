@@ -17,6 +17,6 @@ https://www.medik8s.io/
 The operator is available in [operator hub](https://operatorhub.io/operator/poison-pill-operator)
 
 Should be installed together with [Node Healthcheck Operator](https://operatorhub.io/operator/node-healthcheck-operator)
-
+ 
 ## Help
 Feel free to join our google group to get more info - https://groups.google.com/g/medik8s
