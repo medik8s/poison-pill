@@ -132,10 +132,12 @@ func (r *PoisonPillRemediationReconciler) Reconcile(ctx context.Context, req ctr
 	case v1alpha1.ResourceDeletionRemediationStrategy:
 		return r.remediateWithResourceDeletion(ppr)
 	default:
-		r.logger.Info("Encountered unsupported remediation strategy. Please check template spec", "strategy", ppr.Spec.RemediationStrategy)
+		//this should never happen since we enforce valid values with kubebuilder
+		err := errors.New("unsupported remediation strategy")
+		r.logger.Error(err, "Encountered unsupported remediation strategy. Please check template spec", "strategy", ppr.Spec.RemediationStrategy)
+		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
 }
 
 func (r *PoisonPillRemediationReconciler) isFencingCompleted(ppr *v1alpha1.PoisonPillRemediation) bool {
@@ -478,8 +480,6 @@ func (r *PoisonPillRemediationReconciler) updatePprStatus(node *v1.Node, ppr *v1
 	maxTimeNodeHasRebooted := metav1.NewTime(metav1.Now().Add(r.SafeTimeToAssumeNodeRebooted))
 	ppr.Status.TimeAssumedRebooted = &maxTimeNodeHasRebooted
 	ppr.Status.NodeBackup = node
-	ppr.Status.NodeBackup.Kind = node.GetObjectKind().GroupVersionKind().Kind
-	ppr.Status.NodeBackup.APIVersion = node.APIVersion
 
 	err := r.Client.Status().Update(context.Background(), ppr)
 	if err != nil {
