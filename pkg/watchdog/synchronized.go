@@ -3,6 +3,7 @@ package watchdog
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"time"
 
@@ -34,7 +35,7 @@ func newSynced(log logr.Logger, impl watchdogImpl) *synchronizedWatchdog {
 
 func (swd *synchronizedWatchdog) Start(ctx context.Context) error {
 	swd.mutex.Lock()
-	defer swd.mutex.Unlock()
+	defer swd.safeUnlock()
 	if swd.isStarted {
 		return errors.New("watchdog was started more than once. This is likely to be caused by being added to a manager multiple times")
 	}
@@ -111,4 +112,17 @@ func (swd *synchronizedWatchdog) LastFoodTime() time.Time {
 	swd.mutex.Lock()
 	defer swd.mutex.Unlock()
 	return swd.lastFoodTime
+}
+
+const mutexLocked = 1
+
+//safeUnlock unlocks mutex only if it's not locked
+func (swd *synchronizedWatchdog) safeUnlock() {
+	state := reflect.ValueOf(&swd.mutex).Elem().FieldByName("state")
+	isLocked := state.Int()&mutexLocked == mutexLocked
+	if isLocked {
+		swd.mutex.Unlock()
+	} else {
+		swd.log.Info("unlock method was activated when watchdog mutex was already unlocked")
+	}
 }
