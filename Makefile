@@ -131,6 +131,25 @@ docker-build: test ## Build docker image with the manager.
 docker-push: ## Push docker image with the manager.
 	podman push ${IMG}
 
+##@ Time fixes
+
+.PHONY: csv-date
+csv-date: ## Set createdAt date in the CSV.
+	sed -r -i "s|createdAt: .*|createdAt: `date '+%Y-%m-%d %T'`|;"  ./config/manifests/bases/$(OPERATOR_NAME).clusterserviceversion.yaml
+
+# Some fixes in the bundle
+.PHONY: bundle-fixes
+bundle-fixes: ## update container image
+	sed -r -i "s|containerImage: .*|containerImage: $(IMG)|;" ./bundle/manifests/$(OPERATOR_NAME).clusterserviceversion.yaml
+
+.PHONY: bundle-date
+bundle-date: ## Set createdAt date in the bundle's CSV. Do not commit changes!
+	sed -r -i "s|createdAt: .*|createdAt: `date '+%Y-%m-%d %T'`|;" ./bundle/manifests/$(OPERATOR_NAME).clusterserviceversion.yaml
+
+.PHONY: bundle-date-reset
+bundle-date-reset: ## Reset createdAt date to empty value
+	sed -r -i "s|createdAt: .*|createdAt: \"\"|;" ./bundle/manifests/$(OPERATOR_NAME).clusterserviceversion.yaml
+
 ##@ Download Locally
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
@@ -193,15 +212,16 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete -f -
 
-all: build ## Build and push all the three images to quay (docker, bundle, and index).
-	
+all: ## Build and push all the three images to quay (docker, bundle, and index).
+	docker-build docker-push bundle bundle-build bundle-push index-build index-push
+
 .PHONY: bundle 
-bundle: manifests operator-sdk kustomize ## Generate bundle manifests and metadata, then validate generated files.
+bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
 	$(OPERATOR_SDK) generate --verbose kustomize manifests -q
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	sed -r -i "s|createdAt: \".*\"|createdAt: \"`date "+%Y-%m-%d %T" `\"|;" ./config/manifests/bases/poison-pill.clusterserviceversion.yaml
 	$(KUSTOMIZE) build config/manifests | envsubst | $(OPERATOR_SDK) generate --verbose bundle -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
 	$(OPERATOR_SDK) bundle validate ./bundle
+	$(MAKE) csv-date bundle-date
 
 .PHONY: bundle-build 
 bundle-build: ## Build the bundle image.
