@@ -248,8 +248,8 @@ PROTOC = $(shell pwd)/bin/proto/bin/protoc
 protoc: protoc-gen-go protoc-gen-go-grpc ## Download protoc (protocol buffers tool needed for gRPC)
 	test -f ${PROTOC} || (cd $(shell pwd)/bin/proto && curl -sSLo protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v3.16.0/protoc-3.16.0-linux-x86_64.zip && unzip protoc.zip && rm protoc.zip)
 
-.PHONY: e2e-test
-e2e-test: ## Run end to end tests.
+.PHONY: test-e2e
+test-e2e: ## Run end to end tests.
 	# KUBECONFIG must be set to the cluster, and PP needs to be deployed already
     # count arg makes the test ignoring cached test results
 	go test ./e2e -ginkgo.v -ginkgo.progress -test.v -timeout 60m -count=1
