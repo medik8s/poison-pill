@@ -1,6 +1,9 @@
 # SHELL defines bash so all the inline scripts here will work as expected.
 SHELL := /bin/bash
 
+# Override this when building images for dev only!
+IMAGE_REGISTRY ?= quay.io/medik8s
+
 # Current Operator version
 
 # VERSION defines the project version for the bundle. 
@@ -32,12 +35,23 @@ BUNDLE_DEFAULT_CHANNEL := --default-channel=$(DEFAULT_CHANNEL)
 endif
 BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 
+OPERATOR_NAME ?= poison-pill
+
+# For example, running 'make bundle-build bundle-push index-build index-push' will build and push both
+# medik8s/poison-pill-operator-bundle:$VERSION and medik8s/poison-pill-operator-index:$VERSION.
+IMAGE_TAG_BASE ?= $(IMAGE_REGISTRY)/$(OPERATOR_NAME)
+
+# INDEX_IMG defines the image:tag used for the index.
+# You can use it as an arg. (E.g make bundle-build INDEX_IMG=<some-registry>/<project-name-index>:<tag>)
+INDEX_IMG ?= $(IMAGE_TAG_BASE)-operator-index:$(VERSION)
+
 # BUNDLE_IMG defines the image:tag used for the bundle. 
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
-BUNDLE_IMG ?= quay.io/medik8s/poison-pill-operator-bundle:$(VERSION)
+BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-operator-bundle:$(VERSION)
 
 # Image URL to use all building/pushing image targets
-IMG ?= quay.io/medik8s/poison-pill-operator:$(VERSION)
+IMG ?= $(IMAGE_TAG_BASE)-operator:$(VERSION)
+
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true,preserveUnknownFields=false"
 
@@ -53,9 +67,6 @@ KUBECTL = kubectl
 ifeq (,$(shell which kubectl))
 KUBECTL=oc
 endif
-
-all: build
-
 ##@ General
 
 # The help target prints out all targets with their descriptions organized
@@ -77,7 +88,7 @@ help: ## Display this help.
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
-generate: controller-gen protoc ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations. Also generate protoc / gRPC code
+generate: controller-gen protoc ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 	PATH=$(PATH):$(shell pwd)/bin/proto/bin && $(PROTOC) --go_out=. --go-grpc_out=. pkg/peerhealth/peerhealth.proto
 
@@ -115,26 +126,12 @@ run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go
 
 docker-build: test ## Build docker image with the manager.
-	docker build -t ${IMG} .
+	podman build -t ${IMG} .
 
 docker-push: ## Push docker image with the manager.
-	docker push ${IMG}
+	podman push ${IMG}
 
-##@ Deployment
-
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f -
-
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete -f -
-
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default | envsubst | $(KUBECTL) apply -f -
-
-undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/default | $(KUBECTL) delete -f -
-
+##@ Download Locally
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
@@ -160,37 +157,6 @@ rm -rf $$TMP_DIR ;\
 }
 endef
 
-.PHONY: bundle ## Generate bundle manifests and metadata, then validate generated files.
-bundle: manifests operator-sdk kustomize
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	sed -r -i "s|createdAt: \".*\"|createdAt: \"`date "+%Y-%m-%d %T" `\"|;" ./config/manifests/bases/poison-pill.clusterserviceversion.yaml
-	$(KUSTOMIZE) build config/manifests | envsubst | $(OPERATOR_SDK) generate bundle -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
-	$(OPERATOR_SDK) bundle validate ./bundle
-
-.PHONY: bundle-build ## Build the bundle image.
-bundle-build:
-	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
-
-.PHONY: protoc ## Download protoc (protocol buffers tool needed for gRPC)
-PROTOC = $(shell pwd)/bin/proto/bin/protoc
-protoc: protoc-gen-go protoc-gen-go-grpc
-	test -f ${PROTOC} || (cd $(shell pwd)/bin/proto && curl -sSLo protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v3.16.0/protoc-3.16.0-linux-x86_64.zip && unzip protoc.zip && rm protoc.zip)
-
-PROTOC_GEN_GO = $(shell pwd)/bin/proto/bin/protoc-gen-go
-protoc-gen-go: ## Download protoc-gen-go locally if necessary.
-	$(call go-get-tool,$(PROTOC_GEN_GO),google.golang.org/protobuf/cmd/protoc-gen-go@v1.26)
-
-PROTOC_GEN_GO_GRPC = $(shell pwd)/bin/proto/bin/protoc-gen-go-prpc
-protoc-gen-go-grpc: ## Download protoc-gen-go-grpc locally if necessary.
-	$(call go-get-tool,$(PROTOC_GEN_GO_GRPC),google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.1.0)
-
-.PHONY: e2e-test
-e2e-test:
-	# KUBECONFIG must be set to the cluster, and PP needs to be deployed already
-    # count arg makes the test ignoring cached test results
-	go test ./e2e -ginkgo.v -ginkgo.progress -test.v -timeout 60m -count=1
-
 .PHONY: operator-sdk
 OPERATOR_SDK = ./bin/operator-sdk
 operator-sdk: ## Download operator-sdk locally if necessary.
@@ -203,3 +169,67 @@ ifeq (,$(wildcard $(OPERATOR_SDK)))
 	chmod +x $(OPERATOR_SDK) ;\
 	}
 endif
+
+PROTOC_GEN_GO = $(shell pwd)/bin/proto/bin/protoc-gen-go
+protoc-gen-go: ## Download protoc-gen-go locally if necessary.
+	$(call go-get-tool,$(PROTOC_GEN_GO),google.golang.org/protobuf/cmd/protoc-gen-go@v1.26)
+
+PROTOC_GEN_GO_GRPC = $(shell pwd)/bin/proto/bin/protoc-gen-go-prpc
+protoc-gen-go-grpc: ## Download protoc-gen-go-grpc locally if necessary.
+	$(call go-get-tool,$(PROTOC_GEN_GO_GRPC),google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.1.0)
+
+##@ Deployment
+
+install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	$(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f -
+
+uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
+	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete -f -
+
+deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
+	$(KUSTOMIZE) build config/default | envsubst | $(KUBECTL) apply -f -
+
+undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config.
+	$(KUSTOMIZE) build config/default | $(KUBECTL) delete -f -
+
+all: build ## Build and push all the three images to quay (docker, bundle, and index).
+	
+.PHONY: bundle 
+bundle: manifests operator-sdk kustomize ## Generate bundle manifests and metadata, then validate generated files.
+	$(OPERATOR_SDK) generate --verbose kustomize manifests -q
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
+	sed -r -i "s|createdAt: \".*\"|createdAt: \"`date "+%Y-%m-%d %T" `\"|;" ./config/manifests/bases/poison-pill.clusterserviceversion.yaml
+	$(KUSTOMIZE) build config/manifests | envsubst | $(OPERATOR_SDK) generate --verbose bundle -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
+	$(OPERATOR_SDK) bundle validate ./bundle
+
+.PHONY: bundle-build 
+bundle-build: ## Build the bundle image.
+	podman build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+
+.PHONY: bundle-push
+bundle-push: ## Push the bundle image
+	podman push ${BUNDLE_IMG}
+
+# Build an index image by adding bundle images to an empty catalog using the operator package manager tool, 'opm'.
+# This recipe invokes 'opm' in 'semver' bundle add mode. For more information on add modes, see:
+# https://github.com/operator-framework/community-operators/blob/7f1438c/docs/packaging-operator.md#updating-your-existing-operator
+.PHONY: index-build
+index-build: opm ## Build an index image.
+	$(OPM) index add --container-tool podman --mode semver --tag $(INDEX_IMG) --bundles $(BUNDLE_IMG)
+
+# Push the index image.
+.PHONY: index-push
+index-push: ## Push an index image.
+	podman push $(INDEX_IMG)
+	
+.PHONY: protoc 
+PROTOC = $(shell pwd)/bin/proto/bin/protoc
+protoc: protoc-gen-go protoc-gen-go-grpc ## Download protoc (protocol buffers tool needed for gRPC)
+	test -f ${PROTOC} || (cd $(shell pwd)/bin/proto && curl -sSLo protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v3.16.0/protoc-3.16.0-linux-x86_64.zip && unzip protoc.zip && rm protoc.zip)
+
+.PHONY: e2e-test
+e2e-test: ## Run end to end tests.
+	# KUBECONFIG must be set to the cluster, and PP needs to be deployed already
+    # count arg makes the test ignoring cached test results
+	go test ./e2e -ginkgo.v -ginkgo.progress -test.v -timeout 60m -count=1
