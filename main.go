@@ -21,6 +21,8 @@ import (
 	"flag"
 	"fmt"
 	"github.com/medik8s/poison-pill/pkg/utils"
+	v1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"os"
 	"strconv"
 	"time"
@@ -55,8 +57,9 @@ import (
 )
 
 const (
-	nodeNameEnvVar        = "MY_NODE_NAME"
-	peerHealthDefaultPort = 30001
+	nodeNameEnvVar              = "MY_NODE_NAME"
+	peerHealthDefaultPort       = 30001
+	daemonSetServiceAccountName = "daemonset"
 )
 
 var (
@@ -159,6 +162,12 @@ func initPoisonPillManager(mgr manager.Manager) {
 		setupLog.Error(err, "failed to create default remediation template")
 		os.Exit(1)
 	}
+	setupLog.Info("about to set Daemon Set Permissions")
+	if err := setDaemonSetPermissions(mgr.GetClient()); err != nil {
+		setupLog.Error(err, "failed to set daemonSet permissions")
+		os.Exit(1)
+	}
+	setupLog.Info("Daemon Set Permissions set successfully")
 }
 
 func getDurEnvVarOrDie(varName string) time.Duration {
@@ -335,6 +344,39 @@ func newDefaultTemplateIfNotExist(c client.Client) error {
 	err = c.Create(context.Background(), &pprt, &client.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return errors.Wrap(err, "failed to create a default poison pill template CR")
+	}
+	return nil
+}
+
+// setDaemonSetPermissions creates a service account and cluster role bindings to be used by the daemonSet
+func setDaemonSetPermissions(c client.Client) error {
+
+	setupLog.Info("setDaemonSetPermissions... getting DeploymentNamespace")
+	ns, err := getDeploymentNamespace()
+	if err != nil {
+		setupLog.Info("setDaemonSetPermissions... error getting DeploymentNamespace")
+		return errors.Wrap(err, "unable to get the deployment namespace")
+	}
+
+	sa := v1.ServiceAccount{}
+	sa.Name = daemonSetServiceAccountName
+	sa.Namespace = ns
+	setupLog.Info("setDaemonSetPermissions... creating service account")
+	if err = c.Create(context.Background(), &sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		setupLog.Info("setDaemonSetPermissions... error creating service account")
+		return errors.Wrap(err, "failed to create a Service Account for Poison Pill DaemonSet")
+	}
+
+	crb := rbacv1.ClusterRoleBinding{
+		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: " manager-role"},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: daemonSetServiceAccountName, Namespace: ns}},
+	}
+	crb.Name = fmt.Sprintf("%s-rolebinding", daemonSetServiceAccountName)
+
+	setupLog.Info("setDaemonSetPermissions... creating Cluster Role Binding")
+	if err = c.Create(context.Background(), &crb); err != nil && !apierrors.IsAlreadyExists(err) {
+		setupLog.Info("setDaemonSetPermissions... error creating Cluster Role Binding")
+		return errors.Wrap(err, "failed to create a ClusterRoleBinding for Poison Pill DaemonSet")
 	}
 	return nil
 }
