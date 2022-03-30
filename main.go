@@ -109,14 +109,14 @@ func main() {
 
 	if isManager {
 		initPoisonPillManager(mgr)
+		if err = (&poisonpillv1alpha1.PoisonPillConfig{}).SetupWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "PoisonPillConfig")
+			os.Exit(1)
+		}
 	} else {
 		initPoisonPillAgent(mgr)
 	}
 
-	if err = (&poisonpillv1alpha1.PoisonPillConfig{}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "PoisonPillConfig")
-		os.Exit(1)
-	}
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
