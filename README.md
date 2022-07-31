@@ -3,7 +3,7 @@
 **July 28, 2022**
 
 **Poison Pill Operator** is deprecated in favor of [Self Node Remediation](https://github.com/medik8s/self-node-remediation),
-thus Poison Pill  is moving to a maintenance mode only and we are not taking PRs except for urgent bug fixes.
+thus Poison Pill is moving to a maintenance mode only and we are not taking PRs except for urgent bug fixes.
 
 # Poison Pill - Automatic Kubernetes Node Remediation 
 Existing baremetal remediation strategies utilize BMC credentials to power-cycle and/or reprovision the host.
