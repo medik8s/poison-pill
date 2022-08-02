@@ -20,10 +20,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/medik8s/poison-pill/pkg/utils"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/medik8s/poison-pill/pkg/utils"
 
 	"github.com/pkg/errors"
 
@@ -108,6 +109,10 @@ func main() {
 
 	if isManager {
 		initPoisonPillManager(mgr)
+		if err = (&poisonpillv1alpha1.PoisonPillConfig{}).SetupWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "PoisonPillConfig")
+			os.Exit(1)
+		}
 	} else {
 		initPoisonPillAgent(mgr)
 	}
